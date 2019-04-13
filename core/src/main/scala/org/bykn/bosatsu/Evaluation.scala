@@ -1,6 +1,6 @@
 package org.bykn.bosatsu
 
-import cats.Eval
+import cats.{Eval, Monad}
 import cats.data.NonEmptyList
 import com.stripe.dagon.Memoize
 import java.math.BigInteger
@@ -274,9 +274,14 @@ object Evaluation {
     }
   }
 
+
+  case class NoopState[X](x: X) {
+    def flatMap[Y](f: X => NoopState[Y]) = f(x)
+    def map[Y](f: X => Y) = flatMap(x => NoopState(f(x)))
+  }
 }
 
-case class Evaluation[T](pm: PackageMap.Typed[T], externals: Externals) {
+case class Evaluation[T, F[_]](pm: PackageMap.Typed[T], externals: Externals, lookup: NormalExpression => F[Evaluation.Value])(implicit F: Monad[F]) {
   import Evaluation.{Value, Scoped, Env}
   import Value._
 
