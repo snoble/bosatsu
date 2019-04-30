@@ -23,7 +23,7 @@ sealed abstract class NormalExpression {
   } else {
     this match {
       case a@NormalExpression.App(_, _, _) => a.copy(isReduced=true)
-      case ev@NormalExpression.ExternalVar(_, _, _) => ev.copy(isReduced=true)
+      case ev@NormalExpression.ExternalVar(_, _) => ev
       case m@NormalExpression.Match(_, _, _) => m.copy(isReduced=true)
       case lv@NormalExpression.LambdaVar(_) => lv
       case l@NormalExpression.Lambda(_,_) => l.copy(isReduced=true)
@@ -40,9 +40,10 @@ object NormalExpression {
     def maxLambdaVar = (fn.maxLambdaVar.toList ++ arg.maxLambdaVar.toList)
       .reduceLeftOption(Math.max)
   }
-  case class ExternalVar(pack: PackageName, defName: Identifier, isReduced: Boolean = false)
+  case class ExternalVar(pack: PackageName, defName: Identifier)
   extends NormalExpression {
     def maxLambdaVar = None
+    def isReduced = true
   }
   case class Match(arg: NormalExpression,
     branches: NonEmptyList[(NormalPattern, NormalExpression)], isReduced: Boolean = false)
@@ -311,7 +312,7 @@ object Normalization {
       val res = headReduction(expr) match {
         case App(fn, arg, _) =>
           App(normalOrderReduction(fn), normalOrderReduction(arg))
-        case extVar @ ExternalVar(_, _, _) => extVar
+        case extVar @ ExternalVar(_, _) => extVar
         // check for a match reduction opportunity (beta except for Match instead of lambda)
         case Match(arg, branches, _) =>
           Match(normalOrderReduction(arg), branches.map{ case (p, s) => (p, normalOrderReduction(s))})
@@ -368,7 +369,7 @@ object Normalization {
         case App(fn, arg, _) =>
           App(applyLambdaSubstituion(fn, subst, idx),
             applyLambdaSubstituion(arg, subst, idx), false)
-        case ext @ ExternalVar(_, _, _) => ext
+        case ext @ ExternalVar(_, _) => ext
         case Match(arg, branches, _) =>
           Match(applyLambdaSubstituion(arg, subst, idx), branches.map {
             case (enum, expr) => (enum, applyLambdaSubstituion(expr, subst, idx))
@@ -390,7 +391,7 @@ object Normalization {
       case App(fn, arg, _) =>
         App(incrementLambdaVars(fn, lambdaDepth),
           incrementLambdaVars(arg, lambdaDepth), false)
-      case ext @ ExternalVar(_, _, _) => ext
+      case ext @ ExternalVar(_, _) => ext
       case Match(arg, branches, _) =>
         Match(incrementLambdaVars(arg, lambdaDepth), branches.map {
           case (enum, expr) => (enum, incrementLambdaVars(expr, lambdaDepth))
@@ -564,7 +565,7 @@ case class NormalizePackageMap(pm: PackageMap.Inferred) {
     for {
       innerExpr <- normalizeExpr(expr, nextEnv, p)
       normalExpr = names.foldLeft(innerExpr.tag._2.ne) { case (expr, _) => NormalExpression.Lambda(expr) }
-      finalExpression = innerExpr.updatedTag((innerExpr.tag._1, innerExpr.tag._2.copy(ne=normalExpr)))
+      finalExpression = innerExpr.updatedTag((innerExpr.tag._1, innerExpr.tag._2.copy(ne=normalOrderReduction(normalExpr))))
     } yield (pattern, finalExpression)
   }
 
@@ -666,7 +667,7 @@ case class NormalizePackageMap(pm: PackageMap.Inferred) {
         .get
 
       def loop(params: Int, expr: NormalExpression): NormalExpression =
-        if (params == 0) expr
+        if (params == 0) normalOrderReduction(expr)
         else loop(params - 1, NormalExpression.Lambda(expr))
 
         loop(arity, NormalExpression.Struct(enum, ((arity - 1) to 0 by -1).map(NormalExpression.LambdaVar(_)).toList))

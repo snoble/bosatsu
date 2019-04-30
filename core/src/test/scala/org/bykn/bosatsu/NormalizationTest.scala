@@ -11,7 +11,7 @@ class NormalizationTest extends FunSuite {
   import NormalPattern.{PositionalStruct, Var, ListPat, WildCard, Named}
 
   def App(fn: NormalExpression, arg: NormalExpression) = NormalExpression.App(fn, arg, true)
-  def ExternalVar(pack: PackageName, defName: Identifier) = NormalExpression.ExternalVar(pack, defName, true)
+  def ExternalVar(pack: PackageName, defName: Identifier) = NormalExpression.ExternalVar(pack, defName)
   def Match(arg: NormalExpression, branches: NonEmptyList[(NormalPattern, NormalExpression)]) = NormalExpression.Match(arg, branches, true)
   def LambdaVar(index: Int) = NormalExpression.LambdaVar(index)
   def Lambda(expr: NormalExpression) = NormalExpression.Lambda(expr, true)
