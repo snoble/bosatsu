@@ -6,10 +6,18 @@ import cats.data.NonEmptyList
 
 class NormalizationTest extends FunSuite {
   import TestUtils._
-  import NormalExpression._
   import Lit._
   import Normalization._
   import NormalPattern.{PositionalStruct, Var, ListPat, WildCard, Named}
+
+  def App(fn: NormalExpression, arg: NormalExpression) = NormalExpression.App(fn, arg, true)
+  def ExternalVar(pack: PackageName, defName: Identifier) = NormalExpression.ExternalVar(pack, defName, true)
+  def Match(arg: NormalExpression, branches: NonEmptyList[(NormalPattern, NormalExpression)]) = NormalExpression.Match(arg, branches, true)
+  def LambdaVar(index: Int) = NormalExpression.LambdaVar(index)
+  def Lambda(expr: NormalExpression) = NormalExpression.Lambda(expr, true)
+  def Struct(enum: Int, args: List[NormalExpression]) = NormalExpression.Struct(enum, args, true)
+  def Literal(lit: Lit) = NormalExpression.Literal(lit)
+  def Recursion(lambda: NormalExpression) = NormalExpression.Recursion(lambda, true)
 
   test("Literal") {
       normalTagTest(

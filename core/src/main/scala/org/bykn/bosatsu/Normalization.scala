@@ -17,20 +17,35 @@ sealed abstract class NormalExpression {
    * or there are no lambda variables used in the linked expressions
    */
   def maxLambdaVar: Option[Int]
+  def isReduced: Boolean
+  def reduced: NormalExpression = if (isReduced) {
+    this
+  } else {
+    this match {
+      case a@NormalExpression.App(_, _, _) => a.copy(isReduced=true)
+      case ev@NormalExpression.ExternalVar(_, _, _) => ev.copy(isReduced=true)
+      case m@NormalExpression.Match(_, _, _) => m.copy(isReduced=true)
+      case lv@NormalExpression.LambdaVar(_) => lv
+      case l@NormalExpression.Lambda(_,_) => l.copy(isReduced=true)
+      case s@NormalExpression.Struct(_,_,_) => s.copy(isReduced=true)
+      case l@NormalExpression.Literal(_) => l
+      case r@NormalExpression.Recursion(_,_) => r.copy(isReduced=true)
+    }
+  }
 }
 
 object NormalExpression {
-  case class App(fn: NormalExpression, arg: NormalExpression)
+  case class App(fn: NormalExpression, arg: NormalExpression, isReduced: Boolean = false)
   extends NormalExpression {
     def maxLambdaVar = (fn.maxLambdaVar.toList ++ arg.maxLambdaVar.toList)
       .reduceLeftOption(Math.max)
   }
-  case class ExternalVar(pack: PackageName, defName: Identifier)
+  case class ExternalVar(pack: PackageName, defName: Identifier, isReduced: Boolean = false)
   extends NormalExpression {
     def maxLambdaVar = None
   }
   case class Match(arg: NormalExpression,
-    branches: NonEmptyList[(NormalPattern, NormalExpression)])
+    branches: NonEmptyList[(NormalPattern, NormalExpression)], isReduced: Boolean = false)
   extends NormalExpression {
     def maxLambdaVar =
       (arg.maxLambdaVar.toList ++ branches.toList.flatMap(_._2.maxLambdaVar))
@@ -38,6 +53,7 @@ object NormalExpression {
   }
   case class LambdaVar(index: Int) extends NormalExpression {
     def maxLambdaVar = Some(index)
+    def isReduced = true
   }
   /*
    * It is reasonable to ask how you can define a lambda without an identifier
@@ -49,16 +65,17 @@ object NormalExpression {
    *
    * ref: https://en.wikipedia.org/wiki/De_Bruijn_index
    */
-  case class Lambda(expr: NormalExpression) extends NormalExpression {
+  case class Lambda(expr: NormalExpression, isReduced: Boolean = false) extends NormalExpression {
     def maxLambdaVar = expr.maxLambdaVar.map(_ - 1)
   }
-  case class Struct(enum: Int, args: List[NormalExpression]) extends NormalExpression {
+  case class Struct(enum: Int, args: List[NormalExpression], isReduced: Boolean = false) extends NormalExpression {
     def maxLambdaVar = args.flatMap(_.maxLambdaVar).reduceLeftOption(Math.max)
   }
   case class Literal(lit: Lit) extends NormalExpression {
+    def isReduced = true
     def maxLambdaVar = None
   }
-  case class Recursion(lambda: NormalExpression) extends NormalExpression {
+  case class Recursion(lambda: NormalExpression, isReduced: Boolean = false) extends NormalExpression {
     def maxLambdaVar = lambda.maxLambdaVar
   }
 }
@@ -96,8 +113,8 @@ object Normalization {
 
   def structListAsList(ne: NormalExpression): PatternMatch[List[NormalExpression]] = {
     ne match {
-      case NormalExpression.Struct(0, _) => Matches(Nil)
-      case NormalExpression.Struct(1, List(value, tail)) => structListAsList(tail) match {
+      case NormalExpression.Struct(0, _, _) => Matches(Nil)
+      case NormalExpression.Struct(1, List(value, tail), _) => structListAsList(tail) match {
         case Matches(lst) => Matches(value :: lst)
         case notMatch => notMatch
       }
@@ -132,8 +149,8 @@ object Normalization {
           case Nil =>
             { (arg, acc) =>
               arg match {
-                case NormalExpression.Struct(0, List()) => Matches(acc)
-                case NormalExpression.Struct(_, _) => NoMatch
+                case NormalExpression.Struct(0, List(), _) => Matches(acc)
+                case NormalExpression.Struct(_, _, _) => NoMatch
                 case _ => NotProvable
               }
             }
@@ -144,7 +161,7 @@ object Normalization {
 
             { (arg, acc) =>
               arg match {
-                case NormalExpression.Struct(1, List(argHead, structTail)) =>
+                case NormalExpression.Struct(1, List(argHead, structTail), _) =>
                   fnh(argHead, acc) match {
                     case NoMatch => NoMatch
                     case NotProvable => fnt(structTail, acc) match {
@@ -153,7 +170,7 @@ object Normalization {
                     }
                     case Matches(acc1) => fnt(structTail, acc1)
                   }
-                  case NormalExpression.Struct(_, _) => NoMatch
+                  case NormalExpression.Struct(_, _, _) => NoMatch
                   case _ => NotProvable
               }
             }
@@ -177,7 +194,7 @@ object Normalization {
 
             { (arg, acc) =>
               arg match {
-                case s@NormalExpression.Struct(_, _)  =>
+                case s@NormalExpression.Struct(_, _, _)  =>
                   // we only allow one splice, so we assume the rest of the patterns
                   structListAsList(s) match {
                     case NotProvable => NotProvable
@@ -250,7 +267,7 @@ object Normalization {
             // this is a struct, which means we expect it
             { (arg: NormalExpression, acc: PatternEnv) =>
               arg match {
-                case NormalExpression.Struct(_, args) =>
+                case NormalExpression.Struct(_, args, _) =>
                   processArgs(args, acc)
                 case _ =>
                   NotProvable
@@ -261,7 +278,7 @@ object Normalization {
             // we don't check if idx < 0, because if we compiled, it can't be
             val result = { (arg: NormalExpression, acc: PatternEnv) =>
               arg match {
-                case NormalExpression.Struct(enumId, args) =>
+                case NormalExpression.Struct(enumId, args, _) =>
                   if (enumId == idx) processArgs(args, acc)
                   else NoMatch
                 case _ =>
@@ -288,25 +305,29 @@ object Normalization {
   def normalOrderReduction(expr: NormalExpression): NormalExpression = {
     import NormalExpression._
 
-    val res = headReduction(expr) match {
-      case App(fn, arg) =>
-        App(normalOrderReduction(fn), normalOrderReduction(arg))
-      case extVar @ ExternalVar(_, _) => extVar
-      // check for a match reduction opportunity (beta except for Match instead of lambda)
-      case Match(arg, branches) =>
-        Match(normalOrderReduction(arg), branches.map{ case (p, s) => (p, normalOrderReduction(s))})
-      case lv @ LambdaVar(_)  => lv
-      // check for eta reduction
-      case Lambda(expr)       =>
-        Lambda(normalOrderReduction(expr))
-      case Struct(enum, args) => Struct(enum, args.map(normalOrderReduction(_)))
-      case l @ Literal(_)     => l
-      case Recursion(innerExpr) => Recursion(normalOrderReduction(innerExpr))
-    }
-    if (res != expr) {
-      normalOrderReduction(res)
+    if(expr.isReduced) {
+      expr
     } else {
-      res
+      val res = headReduction(expr) match {
+        case App(fn, arg, _) =>
+          App(normalOrderReduction(fn), normalOrderReduction(arg))
+        case extVar @ ExternalVar(_, _, _) => extVar
+        // check for a match reduction opportunity (beta except for Match instead of lambda)
+        case Match(arg, branches, _) =>
+          Match(normalOrderReduction(arg), branches.map{ case (p, s) => (p, normalOrderReduction(s))})
+        case lv @ LambdaVar(_) => lv
+        // check for eta reduction
+        case Lambda(expr, _) =>
+          Lambda(normalOrderReduction(expr))
+        case Struct(enum, args, _) => Struct(enum, args.map(normalOrderReduction(_)))
+        case l @ Literal(_) => l
+        case Recursion(innerExpr, _) => Recursion(normalOrderReduction(innerExpr))
+      }
+      if (res != expr) {
+        normalOrderReduction(res)
+      } else {
+        res.reduced
+      }
     }
   }
 
@@ -315,19 +336,19 @@ object Normalization {
     import NormalExpression._
     val nextExpr = expr match {
       // beta reduction
-      case App(Lambda(nextExpr), arg) =>
+      case App(Lambda(nextExpr, _), arg, _) =>
         applyLambdaSubstituion(nextExpr, Some(arg), 0)
       // match reduction
-      case m@Match(_, _) =>
+      case m@Match(_, _, _) =>
         findMatch(m) match {
           case None => m
           case Some((pat, env, result)) =>
             solveMatch(env, result)
         }
-      case Recursion(Lambda(innerExpr)) if(innerExpr.maxLambdaVar.map(_ < 0).getOrElse(true)) =>
+      case Recursion(Lambda(innerExpr, _), _) if(innerExpr.maxLambdaVar.map(_ < 0).getOrElse(true)) =>
         applyLambdaSubstituion(innerExpr, None, 0)
       // eta reduction
-      case Lambda(App(innerExpr, LambdaVar(0))) =>
+      case Lambda(App(innerExpr, LambdaVar(0), _), _) =>
         innerExpr
       case _ => expr
     }
@@ -344,43 +365,43 @@ object Normalization {
     idx: Int): NormalExpression = {
       import NormalExpression._
       expr match {
-        case App(fn, arg)                           =>
+        case App(fn, arg, _) =>
           App(applyLambdaSubstituion(fn, subst, idx),
-            applyLambdaSubstituion(arg, subst, idx))
-        case ext @ ExternalVar(_, _)                => ext
-        case Match(arg, branches)                   =>
+            applyLambdaSubstituion(arg, subst, idx), false)
+        case ext @ ExternalVar(_, _, _) => ext
+        case Match(arg, branches, _) =>
           Match(applyLambdaSubstituion(arg, subst, idx), branches.map {
             case (enum, expr) => (enum, applyLambdaSubstituion(expr, subst, idx))
           })
         case LambdaVar(varIndex) if varIndex == idx => subst.get
-        case LambdaVar(varIndex) if varIndex > idx  => LambdaVar(varIndex - 1)
-        case lv @ LambdaVar(_)                      => lv
-        case Lambda(fn)                             => Lambda(applyLambdaSubstituion(fn, subst.map(incrementLambdaVars(_, 0)), idx + 1))
-        case Struct(enum, args)                     =>
+        case LambdaVar(varIndex) if varIndex > idx => LambdaVar(varIndex - 1)
+        case lv @ LambdaVar(_) => lv
+        case Lambda(fn, _) => Lambda(applyLambdaSubstituion(fn, subst.map(incrementLambdaVars(_, 0)), idx + 1))
+        case Struct(enum, args, _)  =>
           Struct(enum, args.map(applyLambdaSubstituion(_, subst, idx)))
-        case l @ Literal(_)                         => l
-        case r @ Recursion(fn)                      => Recursion(applyLambdaSubstituion(fn, subst, idx))
+        case l @ Literal(_) => l
+        case r @ Recursion(fn, _) => Recursion(applyLambdaSubstituion(fn, subst, idx))
       }
   }
 
   private def incrementLambdaVars(expr: NormalExpression, lambdaDepth: Int): NormalExpression = {
     import NormalExpression._
     expr match {
-      case App(fn, arg) =>
+      case App(fn, arg, _) =>
         App(incrementLambdaVars(fn, lambdaDepth),
-          incrementLambdaVars(arg, lambdaDepth))
-      case ext @ ExternalVar(_, _) => ext
-      case Match(arg, branches) =>
+          incrementLambdaVars(arg, lambdaDepth), false)
+      case ext @ ExternalVar(_, _, _) => ext
+      case Match(arg, branches, _) =>
         Match(incrementLambdaVars(arg, lambdaDepth), branches.map {
           case (enum, expr) => (enum, incrementLambdaVars(expr, lambdaDepth))
         })
       case LambdaVar(varIndex) if varIndex >= lambdaDepth => LambdaVar(varIndex + 1)
       case lv @ LambdaVar(_)                      => lv
-      case Lambda(fn)                             => incrementLambdaVars(fn, lambdaDepth + 1)
-      case Struct(enum, args) =>
+      case Lambda(fn, _)                             => incrementLambdaVars(fn, lambdaDepth + 1)
+      case Struct(enum, args, _) =>
         Struct(enum, args.map(incrementLambdaVars(_, lambdaDepth)))
       case l @ Literal(_) => l
-      case Recursion(fn) => Recursion(incrementLambdaVars(fn, lambdaDepth))
+      case Recursion(fn, _) => Recursion(incrementLambdaVars(fn, lambdaDepth))
     }
   }
 }
