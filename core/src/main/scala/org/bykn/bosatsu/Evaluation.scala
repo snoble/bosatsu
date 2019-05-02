@@ -801,7 +801,7 @@ case class Evaluation[T, F[_]](pm: PackageMap.Typed[T], externals: Externals, lo
         (vp, optDt).mapN { case ((variant, prod), dt) =>
           val cons = dt.constructors
           val (_, targs) = Type.applicationArgs(tpe)
-          val replaceMap = dt.typeParams.zip(targs).toMap
+          val replaceMap = dt.typeParams.zip(targs).toMap[Type.Var, Type]
           cons.lift(variant).flatMap { case (_, params, _) =>
             prod.toList.zip(params).traverse { case (a1, (pn, t)) =>
               toJson(a1, Type.substituteVar(t, replaceMap)).map((pn.asString, _))

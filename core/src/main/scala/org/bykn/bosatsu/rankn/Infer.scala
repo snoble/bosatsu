@@ -68,9 +68,28 @@ object Infer {
   case class Env(
     uniq: Ref[Long],
     vars: Map[Name, Type],
-    typeCons: Map[(PackageName, Constructor), Cons])
+    typeCons: Map[(PackageName, Constructor), Cons],
+    variances: Map[Type.Const.Defined, List[Variance]]) {
+
+    def addVars(vt: List[(Name, Type)]): Env =
+      copy(vars = vt.foldLeft(vars)(_ + _))
+  }
 
   object Env {
+    def apply(uniq: Ref[Long],
+      vars: Map[Name, Type],
+      typeCons: Map[(PackageName, Constructor), Cons]): Env = {
+
+      val variances = typeCons
+        .iterator
+        .map { case (_, (vs, _, c)) =>
+          (c, vs.map(_._2))
+        }
+        .toMap
+        // TODO, the typeCons don't require all these variances to match
+      Env(uniq, vars, typeCons, variances)
+    }
+
     def init(vars: Map[Name, Type], tpes: Map[(PackageName, Constructor), Cons]): RefSpace[Env] =
       RefSpace.newRef(0L).map(Env(_, vars, tpes))
   }
@@ -153,8 +172,10 @@ object Infer {
       def message = s"unexpected bound ${v.name} at $rb in unification with $in at $rt"
     }
 
-    case class UnknownConstructor(name: (PackageName, Constructor), env: Env) extends NameError {
-      def message = s"unknown Constructor $name. Known: ${env.typeCons.keys.toList.sorted}"
+    case class UnknownConstructor(name: (PackageName, Constructor), region: Region, env: Env) extends NameError {
+      def knownConstructors: List[(PackageName, Constructor)] = env.typeCons.keys.toList.sorted
+
+      def message = s"unknown Constructor $name. Known: $knownConstructors"
     }
 
     case class UnionPatternBindMismatch(pattern: Pattern, names: List[List[Identifier.Bindable]]) extends NameError {
@@ -218,19 +239,23 @@ object Infer {
       def run(env: Env) = RefSpace.pure(Right(env.vars))
     }
 
-    case class GetDataCons(fqn: (PackageName, Constructor)) extends Infer[Cons] {
+    case class GetDataCons(fqn: (PackageName, Constructor), reg: Region) extends Infer[Cons] {
       def run(env: Env) =
         RefSpace.pure(
           env.typeCons.get(fqn) match {
             case None =>
-              Left(Error.UnknownConstructor(fqn, env))
+              Left(Error.UnknownConstructor(fqn, reg, env))
             case Some(res) =>
               Right(res)
           })
     }
 
+    case object GetVarianceMap extends Infer[Map[Type.Const.Defined, List[Variance]]] {
+      def run(env: Env) = RefSpace.pure(Right(env.variances))
+    }
+
     case class ExtendEnvs[A](vt: List[(Name, Type)], in: Infer[A]) extends Infer[A] {
-      def run(env: Env) = in.run(env.copy(vars = vt.foldLeft(env.vars)(_ + _)))
+      def run(env: Env) = in.run(env.addVars(vt))
     }
 
     case class Lift[A](res: RefSpace[Either[Error, A]]) extends Infer[A] {
@@ -268,6 +293,37 @@ object Infer {
           (bound *> zonkTypedExpr(rho)).map(TypedExpr.forAll(aligned.map(_._2), _))
       }
 
+    def varianceOf(t: Type): Infer[Option[Variance]] = {
+      import Type._
+      def variances(vs: Map[Type.Const.Defined, List[Variance]], t: Type): Option[List[Variance]] =
+        t match {
+          case FnType => Some(Variance.in :: Variance.co :: Nil)
+          case TyApply(left, _) =>
+            variances(vs, left).map(_.drop(1))
+          case TyConst(defined@Const.Defined(_, _)) =>
+            vs.get(defined)
+          case TyVar(_) => None
+          case TyMeta(_) =>
+            // this is almost certainly a bug in this approach.
+            // we will probably need a meta var for Variance as well
+            // since inorder to infer this TyMeta, we may need to use
+            // the variance
+            None
+          case ForAll(_, r) => variances(vs, r)
+        }
+
+      for {
+        vs <- GetVarianceMap
+        t1 <- zonkType(t) // fill in any known variances
+      } yield (variances(vs, t1).flatMap(_.headOption))
+    }
+
+    // For two types that unify, check both variances
+    def varianceOf2(t1: Type, t2: Type): Infer[Option[Variance]] =
+      varianceOf(t1).flatMap {
+        case s@Some(_) => pure(s)
+        case None => varianceOf(t2)
+      }
     /**
      * Skolemize on a function just recurses on the result type.
      *
@@ -286,12 +342,20 @@ object Infer {
             sks2ty <- skolemize(substTy(tvs, sksT, ty))
             (sks2, ty2) = sks2ty
           } yield (sks1.toList ::: sks2, ty2)
-        case Type.Fun(argTy, resTy) =>
-          skolemize(resTy).map {
-            case (sks, resTy) =>
-              (sks, Type.Fun(argTy, resTy))
-          }
+        case Type.TyApply(left, right) =>
           // Rule PRFUN
+          varianceOf(left)
+            .product(skolemize(left))
+            .flatMap {
+              case (Some(Variance.Covariant), (sksl, sl)) =>
+                for {
+                  skr <- skolemize(right)
+                  (sksr, sr) = skr
+                } yield (sksl ::: sksr, Type.TyApply(sl, sr))
+              case (_, (sksl, sl)) =>
+                // otherwise, we don't skolemize the right
+                pure((sksl, Type.TyApply(sl, right)))
+            }
         case other =>
           // Rule PRMONO
           pure((Nil, other))
@@ -330,21 +394,8 @@ object Infer {
       lift(RefSpace.newRef[Either[Error, A]](Left(err)))
 
     def substTy(keys: NonEmptyList[Type.Var], vals: NonEmptyList[Type], t: Type): Type = {
-
-      def subst(env: Map[Type.Var, Type], t: Type): Type =
-        t match {
-          case Type.TyApply(on, arg) => Type.TyApply(subst(env, on), subst(env, arg))
-          case v@Type.TyVar(n) => env.getOrElse(n, v)
-          case Type.ForAll(ns, rho) =>
-            val boundSet: Set[Type.Var] = ns.toList.toSet
-            val env1 = env.filterKeys { v => !boundSet(v) }
-            Type.ForAll(ns, subst(env1, rho))
-          case m@Type.TyMeta(_) => m
-          case c@Type.TyConst(_) => c
-        }
-
       val env = keys.toList.iterator.zip(vals.toList.iterator).toMap
-      subst(env, t)
+      Type.substituteVar(t, env)
     }
 
     def substExpr[A](keys: NonEmptyList[Type.Var], vals: NonEmptyList[Type], expr: Expr[A]): Expr[A] = {
@@ -398,6 +449,40 @@ object Infer {
             case (a2, r2) =>
               subsCheckFn(a1, r1, a2, r2, left, right)
           }
+        case (rho1, Type.TyApply(l2, r2)) =>
+          unifyTyApp(rho1, left, right).flatMap {
+            case (l1, r1) =>
+              val check2 = varianceOf2(l1, l2).flatMap {
+                case Some(Variance.Covariant) =>
+                  subsCheck(r1, r2, left, right).void
+                case Some(Variance.Contravariant) =>
+                  subsCheck(r2, r1, right, left).void
+                case Some(Variance.Phantom) =>
+                  // this doesn't matter
+                  pure(())
+                case None | Some(Variance.Invariant) =>
+                  unify(r1, r2, left, right).void
+              }
+              // should we coerce to t2? Seems like... but copying previous code
+              (subsCheck(l1, l2, left, right) *> check2).as(TypedExpr.coerceRho(t))
+          }
+        case (Type.TyApply(l1, r1), rho2) =>
+          unifyTyApp(rho2, left, right).flatMap {
+            case (l2, r2) =>
+              val check2 = varianceOf2(l1, l2).flatMap {
+                case Some(Variance.Covariant) =>
+                  subsCheck(r1, r2, left, right).void
+                case Some(Variance.Contravariant) =>
+                  subsCheck(r2, r1, right, left).void
+                case Some(Variance.Phantom) =>
+                  // this doesn't matter
+                  pure(())
+                case None | Some(Variance.Invariant) =>
+                  unify(r1, r2, left, right).void
+              }
+              // should we coerce to t2? Seems like... but copying previous code
+              (subsCheck(l1, l2, left, right) *> check2).as(TypedExpr.coerceRho(t))
+          }
         case (t1, t2) =>
           // rule: MONO
           unify(t1, t2, left, right).as(TypedExpr.coerceRho(t1)) // TODO this coerce seems right, since we have unified
@@ -423,6 +508,17 @@ object Infer {
             resT <- newMetaType
             _ <- unify(tau, Type.Fun(argT, resT), fnRegion, evidenceRegion)
           } yield (argT, resT)
+      }
+
+    def unifyTyApp(apType: Type, apRegion: Region, evidenceRegion: Region): Infer[(Type, Type)] =
+      apType match {
+        case Type.TyApply(left, right) => pure((left, right))
+        case notApply =>
+          for {
+            leftT <- newMetaType
+            rightT <- newMetaType
+            _ <- unify(notApply, Type.TyApply(leftT, rightT), apRegion, evidenceRegion)
+          } yield (leftT, rightT)
       }
 
     // invariant the flexible type variable tv1 is not bound
@@ -461,7 +557,13 @@ object Infer {
         case (Type.TyApply(a1, b1), Type.TyApply(a2, b2)) =>
           unify(a1, a2, r1, r2) *> unify(b1, b2, r1, r2)
         case (Type.TyConst(c1), Type.TyConst(c2)) if c1 == c2 => unit
-        case (left, right) => fail(Error.NotUnifiable(left, right, r1, r2))
+        // these shouldn't be reachable since we have Tau types, but may be reachable
+        // case (Type.ForAll(_, _), _) =>
+        //   sys.error(s"expected tau type: $t1, $t2")
+        // case (_, Type.ForAll(_, _)) =>
+        //   sys.error(s"expected tau type: $t1, $t2")
+        case (left, right) =>
+          fail(Error.NotUnifiable(left, right, r1, r2))
       }
 
     /**
@@ -777,7 +879,7 @@ object Infer {
           } yield (p1, binds)
         case GenPattern.PositionalStruct(nm, args) =>
           for {
-            paramRes <- instDataCon(nm)
+            paramRes <- instDataCon(nm, reg)
             (params, res) = paramRes
             // we need to do a pattern linting phase and probably error
             // if the pattern arity does not match the arity of the constructor
@@ -844,8 +946,8 @@ object Infer {
      *
      * Instantiation fills in all
      */
-    def instDataCon(consName: (PackageName, Constructor)): Infer[(List[Type], Type.Tau)] =
-      GetDataCons(consName).flatMap {
+    def instDataCon(consName: (PackageName, Constructor), reg: Region): Infer[(List[Type], Type.Tau)] =
+      GetDataCons(consName, reg).flatMap {
         case (Nil, consParams, tpeName) =>
           Infer.pure((consParams, Type.TyConst(tpeName)))
         case (v0 :: vs, consParams, tpeName) =>
