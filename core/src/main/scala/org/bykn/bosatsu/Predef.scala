@@ -1,6 +1,7 @@
 package org.bykn.bosatsu
 
 import cats.data.{NonEmptyList, Validated}
+import cats.Eval
 import fastparse.all._
 import java.math.BigInteger
 import scala.collection.immutable.SortedMap
@@ -100,7 +101,7 @@ object Predef {
     ps.map { case (a, p) => (a, p.withImport(predefImports)) }
 }
 
-case class PredefImpl[T[_]]()(implicit valueT: Evaluation.ValueT[T]) {
+case class PredefImpl[T[_]]()(implicit valueT: Evaluation.ValueT[T], valueToTag: Eval[Evaluation.Value[T]] => T[Evaluation.Value[T]]) {
 
   import Evaluation.Value
   import valueT.{VInt, VOption, Comparison, VList, ConsValue, Str, ExternalValue, SumValue, ProductValue}
@@ -170,7 +171,8 @@ case class PredefImpl[T[_]]()(implicit valueT: Evaluation.ValueT[T]) {
     def loop(biValue: Value[T], bi: BigInteger, state: Value[T]): Value[T] =
       if (bi.compareTo(BigInteger.ZERO) <= 0) state
       else {
-        val fn0 = fnT(biValue).value.asFn
+        val preFn = fnT(biValue, valueToTag(Eval.now(biValue))).value.asFn
+        val fn0 = { ev: Value[T] => fnT(ev, valueToTag(Eval.now(ev))) }
         fn0(state).value match {
           case ConsValue(nextI, ConsValue(ConsValue(nextA, _), _)) =>
             val n = i(nextI)
@@ -218,9 +220,9 @@ case class PredefImpl[T[_]]()(implicit valueT: Evaluation.ValueT[T]) {
       case ConsValue(fn, _) =>
         implicit val ordValue: Ordering[Value[T]] =
           new Ordering[Value[T]] {
-            val fnV = fn.asFn
+            val fnV = fn.asFnS
             def compare(a: Value[T], b: Value[T]): Int =
-              fnV(a).flatMap(_.asFn(b)).value match {
+              fnV(a).flatMap( { vf: Value[T] => (vf.asFnS).apply(b) }).value match {
                 case SumValue(v, _) =>
                   v - 1
                 case other => sys.error(s"type error: $other")

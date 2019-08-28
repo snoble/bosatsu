@@ -112,9 +112,9 @@ object ServerCommand {
   def typeCheck(inputs: NonEmptyList[Path], ifs: List[Package.Interface]): IO[(PackageMap.Inferred, List[(Path, PackageName)])] =
     MainCommand.typeCheck(inputs, ifs)
   
-  type NEValueTag[X] = (NormalExpression, List[Eval[X]])
   val neTokenImplicits: Evaluation.NETokenImplicits[(Declaration, Normalization.NormalExpressionTag)] = Evaluation.NETokenImplicits()(_._2.ne)
   import neTokenImplicits._
+  import Evaluation.NEValueTag
   implicit val visImpl = VisImpl[NEValueTag]()
 
   case class WebServer(inputs: NonEmptyList[Path], log: Option[Path], visParam: Option[String])

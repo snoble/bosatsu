@@ -22,7 +22,7 @@ object Evaluation {
     * most of the API
     */
   abstract class Value[T[_]](implicit valueT: ValueT[T]) {
-    def asLazyFn: Eval[Value[T]] => Eval[Value[T]] =
+    def asLazyFn: (Eval[Value[T]], T[Value[T]]) => Eval[Value[T]] =
       this match {
         case valueT.FnValue(f, _) => f
         case other                =>
@@ -31,15 +31,21 @@ object Evaluation {
         // $COVERAGE-ON$
       }
 
-    def asFn: Value[T] => Eval[Value[T]] =
+    def asFn: (Value[T], T[Value[T]]) => Eval[Value[T]] =
       this match {
-        case valueT.FnValue(f, _) => { v =>
-          f(Eval.now(v))
+        case valueT.FnValue(f, _) => { (v, t) =>
+          f(Eval.now(v), t)
         }
         case other =>
           // $COVERAGE-OFF$this should be unreachable
           sys.error(s"invalid cast to Fn: $other")
         // $COVERAGE-ON$
+      }
+
+    def asFnS(implicit valueToTag: Eval[Value[T]] => T[Value[T]]): Value[T] => Eval[Value[T]] =
+      { v: Value[T] =>
+        val ev = Eval.now(v)
+        asLazyFn(ev, valueToTag(ev))
       }
   }
 
@@ -69,11 +75,11 @@ object Evaluation {
 
     case class SumValue(variant: Int, value: ProductValue) extends Value[T]
 
-    case class FnValue(toFn: Eval[Value[T]] => Eval[Value[T]], tag: T[Value[T]])
+    case class FnValue(toFn: (Eval[Value[T]], T[Value[T]]) => Eval[Value[T]], tag: T[Value[T]])
         extends Value[T]
     object FnValue {
       def apply(tag: T[Value[T]])(
-          toFn: Eval[Value[T]] => Eval[Value[T]]
+          toFn: (Eval[Value[T]], T[Value[T]]) => Eval[Value[T]]
       ): FnValue = FnValue(toFn, tag)
     }
     case class ExternalValue(toAny: Any, tokenizeFn: Any => Json)
@@ -227,19 +233,19 @@ object Evaluation {
 
     def asLambda[T](name: Bindable, tag: T)(
         implicit
-        updateEnv: (Env[E, V], Bindable, Eval[Value[V]]) => Env[E, V],
+        updateEnvTag: (V[Evaluation.Value[V]], E) => E,
         valueTag: (T, Env[E, V]) => V[Value[V]]
     ): Scoped[E, V] =
       fromFn[E, V] { env =>
         import cats.Now
         val fn =
           valueT.FnValue(valueTag(tag, env)) {
-            case n @ Now(v) =>
-              inEnv(updateEnv(env, name, n)) // inEnv(env.addLambdaVar(name, n))
-            case v =>
+            case (n @ Now(v), vTag) =>
+              inEnv(env.copy(map = env.map.updated(name, n), tag = updateEnvTag(vTag, env.tag)))
+            case (v, vTag) =>
               v.flatMap { v0 =>
-                inEnv(updateEnv(env, name, Eval.now(v0)))
-              // inEnv(env.addLambdaVar(name, Eval.now(v0)))
+                val n = Eval.now(v0)
+                inEnv(env.copy(map = env.map.updated(name, n), tag = updateEnvTag(vTag, env.tag)))
               }
           }
         //ne, ne.map (ne => env.lambdas.take(ne.maxLambdaVar.getOrElse(0))))
@@ -250,13 +256,13 @@ object Evaluation {
     def emptyScope(implicit emptyEnv: Env[E, V]): Scoped[E, V] =
       fromFn[E, V](_ => inEnv(emptyEnv))
 
-    def applyArg(arg: Scoped[E,V]): Scoped[E,V] =
+    def applyArg[T](arg: Scoped[E,V], t: T)(implicit valueTag: (T, Env[E,V]) => V[Value[V]]): Scoped[E,V] =
       fromFn { env =>
         val fnE = inEnv(env).memoize
         val argE = arg.inEnv(env)
         fnE.flatMap { fn =>
           // safe because we typecheck
-          fn.asLazyFn(argE)
+          fn.asLazyFn(argE, valueTag(t, env))
         }
       }
 
@@ -325,19 +331,14 @@ object Evaluation {
   case class UnitImplicits[T]() {
     implicit val tokenize: Value[Const[Unit, ?]] => Json = _ => Json.JNull
     implicit val emptyEnv: Env[Unit, Const[Unit, ?]] = Env(Map(), ())
-    implicit val updateEnv: (
-        Env[Unit, Const[Unit, ?]],
-        Bindable,
-        Eval[Value[Const[Unit, ?]]]
-    ) => Env[Unit, Const[Unit, ?]] = (env, name, ev) =>
-      Env(env.map.updated(name, ev), env.tag)
+    implicit val updateEnvTag: (Const[Unit, Value[Const[Unit, ?]]], Unit) => Unit = (_, _) => ()
     implicit val valueTag: (
         T,
         Evaluation.Env[Unit, Const[Unit, ?]]
     ) => Const[Unit, Value[Const[Unit, ?]]] = (_, _) => Const(())
     implicit val externalFnTag: (PackageName, Identifier) => (
         Int,
-        List[Eval[Value[Const[Unit, ?]]]]
+        List[Const[Unit, Value[Const[Unit, ?]]]]
     ) => Const[Unit, Value[Const[Unit, ?]]] =
       (_, _) => (_, _) => Const(())
     implicit val tagForConstructor: (
@@ -346,25 +347,30 @@ object Evaluation {
         Int
     ) => Const[Unit, Value[Const[Unit, ?]]] = (_, _, _) => Const(())
     implicit val valueT: ValueT[Const[Unit, ?]] = ValueT()
+    implicit val valueToTag: Eval[Evaluation.Value[Const[Unit, ?]]] => Const[Unit, Evaluation.Value[Const[Unit, ?]]] =
+      _ => Const(())
     implicit val predefImpl: PredefImpl[Const[Unit, ?]] = PredefImpl()
   }
 
-  type NEValueTag[X] = (NormalExpression, List[Eval[X]])
-  type NEEnv = Env[List[Eval[Value[NEValueTag]]], NEValueTag]
+  case class NEValueTag[X](value: Either[Eval[X], (NormalExpression, List[NEValueTag[X]])])
+  //type NEValueTag[X] = (NormalExpression, List[ScopeEntry[X]])
+  type NEEnvTag = List[NEValueTag[Evaluation.Value[NEValueTag]]]
+  type NEEnv = Env[NEEnvTag, NEValueTag]
   case class NETokenImplicits[T]()(
       implicit extractNormalExpression: T => NormalExpression
   ) {
     implicit val valueT: ValueT[NEValueTag] = ValueT()
+    implicit val valueToTag: Eval[Evaluation.Value[NEValueTag]] => NEValueTag[Evaluation.Value[NEValueTag]] =
+      v => NEValueTag(Left(v))
     implicit val predefImpl: PredefImpl[NEValueTag] = PredefImpl()
     implicit val emptyEnv: NEEnv = Env(Map(), List())
-    implicit val updateEnv
-        : (NEEnv, Bindable, Eval[Value[NEValueTag]]) => NEEnv =
-      (env, name, n) =>
-        env.copy(map = env.map.updated(name, n), tag = n :: env.tag)
+    implicit val updateEnvTag: (NEValueTag[Value[NEValueTag]], NEEnvTag) => NEEnvTag =
+      (vTag, envTag) =>
+        vTag :: envTag
     implicit val valueTag: (T, NEEnv) => NEValueTag[Value[NEValueTag]] =
       (t, env) => {
         val ne = extractNormalExpression(t)
-        (ne, env.tag.take(ne.maxLambdaVar.map(_ + 1).getOrElse(0)))
+        NEValueTag(Right((ne, env.tag.take(ne.maxLambdaVar.map(_ + 1).getOrElse(0)))))
       }
     import NormalExpression.{App, LambdaVar, ExternalVar, Struct, Lambda}
     def applyNTimes(n: Int, ne0: NormalExpression): NormalExpression =
@@ -373,11 +379,11 @@ object Evaluation {
       }
     implicit val externalFnTag: (PackageName, Identifier) => (
         Int,
-        List[Eval[Value[NEValueTag]]]
+        NEEnvTag
     ) => NEValueTag[Value[NEValueTag]] =
       (pn, dn) => {
         val ev = ExternalVar(pn, dn)
-        (k, vars) => (applyNTimes(k, ev), vars)
+        (k, vars) => NEValueTag(Right((applyNTimes(k, ev), vars)))
       }
     def lambdaNTimes(n: Int, ne0: NormalExpression): NormalExpression =
       (0 until n).foldLeft(ne0) { (ne, _) =>
@@ -390,18 +396,23 @@ object Evaluation {
         val struct = Struct(enum, (0 until arity).map { k =>
           LambdaVar(arity - k)
         }.toList)
-        (lambdaNTimes(param, struct), args.map(Eval.now))
+        NEValueTag(Right((lambdaNTimes(param, struct), args.map(arg => NEValueTag(Left(Eval.now(arg)))))))
       }
+    def tokenizeTag(tag: NEValueTag[Value[NEValueTag]]): Json = {
+      println(s"tokenize $tag")
+      tag.value match {
+      case Left(ev) => Json.JObject(List("value" -> tokenize(ev.value)))
+      case Right((ne, scope)) => Json.JObject(List(
+        "ne" -> Json.JString(ne.toString),
+        "scope" -> Json.JArray(scope.map(tokenizeTag(_)).toVector)
+      ))
+      }
+    }
+
     implicit val tokenize
         : Value[NEValueTag] => Json = {
           case valueT.ExternalValue(any, tf) => tf(any)
-          case valueT.FnValue(_, tag) => {
-            val lst = List(
-              "ne" -> Json.JString(tag._1.toString),
-              "scope" -> Json.JArray(tag._2.map(ev => tokenize(ev.value)).toVector)
-            )
-            Json.JObject(lst)
-          }
+          case valueT.FnValue(_, tag@NEValueTag(Right(_))) => tokenizeTag(tag)
           case valueT.ProductValue(lst) => Json.JArray(lst.map(tokenize).toVector)
           case valueT.SumValue(k, p)  => Json.JArray((Json.JNumberStr(k.toString) +: p.toList.map(tokenize)).toVector)
 
@@ -415,16 +426,10 @@ case class Evaluation[T, E, V[_]](
 )(
     implicit
     emptyEnv: Evaluation.Env[E, V],
-    updateEnv: (
-        Evaluation.Env[E, V],
-        Bindable,
-        Eval[Evaluation.Value[V]]
-    ) => Evaluation.Env[E, V],
+    updateEnvTag: (V[Evaluation.Value[V]], E) => E,
     valueTag: (T, Evaluation.Env[E, V]) => V[Evaluation.Value[V]],
-    externalFnTag: (PackageName, Identifier) => (
-        Int,
-        List[Eval[Evaluation.Value[V]]]
-    ) => V[Evaluation.Value[V]],
+    valueToTag: Eval[Evaluation.Value[V]] => V[Evaluation.Value[V]],
+    externalFnTag: (PackageName, Identifier) => (Int, List[V[Evaluation.Value[V]]]) => V[Evaluation.Value[V]],
     tagForConstructor: (
         Int,
         List[Evaluation.Value[V]],
@@ -898,7 +903,7 @@ case class Evaluation[T, E, V[_]](
              val efn = recurse(fn)
              val earg = recurse(arg)
 
-             efn.applyArg(earg)
+             efn.applyArg(earg, expr.tag)
          }
        case a@AnnotatedLambda(name, _, expr, _) =>
          expr match {
@@ -950,17 +955,17 @@ case class Evaluation[T, E, V[_]](
 
     // TODO: this is a obviously terrible
     // the encoding is inefficient, the implementation is inefficient
-    def loop(param: Int, args: List[Value[V]]): Value[V] =
+    def loop(param: Int, args: List[(Value[V], V[Value[V]])]): Value[V] =
       if (param == 0) {
-        val prod = ProductValue.fromList(args.reverse)
+        val prod = ProductValue.fromList(args.reverse.map(_._1))
         if (singleItemStruct) prod
         else SumValue(enum, prod)
       } else
-        FnValue(tagForConstructor(param, args, enum)) {
-          case cats.Now(a) => cats.Now(loop(param - 1, a :: args))
-          case ea =>
+        FnValue(tagForConstructor(param, args.map(_._1), enum)) {
+          case (cats.Now(a), t) => cats.Now(loop(param - 1, (a, t) :: args))
+          case (ea, t) =>
             ea.map { a =>
-              loop(param - 1, a :: args)
+              loop(param - 1, (a, t) :: args)
             }.memoize
         }
     //, Some(Lambda(Struct(enum, List(LambdaVar(0))))), Some(args.map(Eval.now)))
