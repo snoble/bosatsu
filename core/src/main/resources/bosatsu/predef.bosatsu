@@ -30,6 +30,7 @@ export [
   items,
   map_List,
   mod_Int,
+  random_variable,
   range,
   range_fold,
   remove_key,
@@ -131,6 +132,8 @@ external struct String
 external def string_Order_fn(str0: String, str1: String) -> Comparison
 string_Order = Order(string_Order_fn)
 external def concat_String(items: List[String]) -> String
+
+external def random_variable(desc: String) -> Int
 
 external def int_to_String(i: Int) -> String
 

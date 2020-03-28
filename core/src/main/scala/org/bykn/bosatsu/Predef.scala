@@ -88,6 +88,7 @@ object Predef {
       .add(packageName, "items", FfiCall.Fn1(PredefImpl.items(_)))
       .add(packageName, "remove_key", FfiCall.Fn2(PredefImpl.remove_key(_, _)))
       .add(packageName, "concat_String", FfiCall.Fn1(PredefImpl.concat_String(_)))
+      .add(packageName, "random_variable", FfiCall.Fn1(PredefImpl.random_variable(_)))
 
   def withPredef(ps: List[Package.Parsed]): List[Package.Parsed] =
     predefPackage :: ps.map(_.withImport(predefImports))
@@ -168,6 +169,11 @@ object PredefImpl {
     val Value.Str(prestr) = prefix
     println(s"$prestr: $v")
     v
+  }
+
+  def random_variable(desc: Value): Value = desc match {
+    case Value.Str(d) => RandomVarValue(List(d))
+    case other => sys.error(s"type error: $other")
   }
 
   def string_Order_Fn(a: Value, b: Value): Value =

@@ -102,7 +102,11 @@ object Value {
     }
 
   }
+
   case class ExternalValue(toAny: Any) extends Value
+  case class RandomVarValue(description: List[String]) extends Value {
+    def toAny: Any = sys.error("toAny shouldn't be called on a RandomVarValue")
+  }
 
   val False: Value = SumValue(0, UnitValue)
   val True: Value = SumValue(1, UnitValue)

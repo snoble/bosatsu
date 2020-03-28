@@ -8,7 +8,10 @@ object FfiCall {
   final case class Fn1(fn: Value => Value) extends FfiCall {
     import Value.FnValue
 
-    private[this] val evalFn: FnValue = FnValue(fn)
+    private[this] val evalFn: FnValue = FnValue {
+      case Value.RandomVarValue(description) => Value.RandomVarValue("apply function" :: description)
+      case e1 => fn(e1)
+    }
 
     def call(t: rankn.Type): Value = evalFn
   }
@@ -17,11 +20,12 @@ object FfiCall {
 
     private[this] val evalFn: FnValue =
       FnValue { e1 =>
-        FnValue { e2 =>
-          fn(e1, e2)
-        }
+        FnValue { e2 => (e1, e2) match {
+          case (Value.RandomVarValue(description), e2) => Value.RandomVarValue(s"apply function(self, $e2)" :: description)
+          case (e1, Value.RandomVarValue(description)) => Value.RandomVarValue(s"apply function($e1, self)" :: description)
+          case (e1, e2) => fn(e1, e2)
+        }}
       }
-
     def call(t: rankn.Type): Value = evalFn
   }
   final case class Fn3(fn: (Value, Value, Value) => Value) extends FfiCall {
