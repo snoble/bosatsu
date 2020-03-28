@@ -45,7 +45,7 @@ object RandomVarEvaluation {
   }
 }
 
-case class RandomVarEvaluation(packs: PackageMap.Typed[(Declaration, NormalExpressionTag)], externals: Externals) {
+case class RandomVarEvaluation(packs: PackageMap.Typed[(Declaration, NormalExpressionTag)], externals: Externals) extends NormalizedEvaluation {
   import RandomVarEvaluation._
 
   def evaluateLast(p: PackageName): Option[Value] = for {

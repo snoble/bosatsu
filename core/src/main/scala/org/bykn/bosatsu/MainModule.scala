@@ -464,7 +464,8 @@ abstract class MainModule[IO[_]](implicit val moduleIOMonad: MonadError[IO, Thro
       mainPackage: MainIdentifier,
       deps: PathGen,
       errColor: Colorize,
-      packRes: PackageResolver) extends MainCommand {
+      packRes: PackageResolver,
+      useRandomVarEval: Boolean) extends MainCommand {
 
       def run: IO[Output] =
         for {
@@ -475,7 +476,7 @@ abstract class MainModule[IO[_]](implicit val moduleIOMonad: MonadError[IO, Thro
           mainPackageNameValue <- mainPackage.getMain(names)
           (mainPackageName, value) = mainPackageNameValue
           out <- if (packs.toMap.contains(mainPackageName)) {
-            val ev = NormalEvaluation(packs, Predef.jvmExternals)
+            val ev = if(useRandomVarEval) RandomVarEvaluation(packs, Predef.jvmExternals) else NormalEvaluation(packs, Predef.jvmExternals)
             val res = value match {
               case None => ev.evaluateLast(mainPackageName)
               case Some(ident) => ev.evaluateName(mainPackageName, ident)
@@ -866,7 +867,9 @@ abstract class MainModule[IO[_]](implicit val moduleIOMonad: MonadError[IO, Thro
       val evalOpt = (srcs, mainP, includes, colorOpt, packRes)
         .mapN(Evaluate(_, _, _, _, _))
       val nEvalOpt = (srcs, mainP, includes, colorOpt, packRes)
-        .mapN(NEvaluate(_, _, _, _, _))
+        .mapN(NEvaluate(_, _, _, _, _, false))
+      val rvEvalOpt = (srcs, mainP, includes, colorOpt, packRes)
+        .mapN(NEvaluate(_, _, _, _, _, true))
       val typeCheckOpt = (srcs, ifaces, outputPath.orNone, interfaceOutputPath.orNone, colorOpt, noSearchRes)
         .mapN(TypeCheck(_, _, _, _, _, _))
       val testOpt = (srcs, testP, includes, colorOpt, packRes)
@@ -874,6 +877,7 @@ abstract class MainModule[IO[_]](implicit val moduleIOMonad: MonadError[IO, Thro
 
       Opts.subcommand("eval", "evaluate an expression and print the output")(evalOpt)
         .orElse(Opts.subcommand("n-eval", "custom evaluator that uses normal expression")(nEvalOpt))
+        .orElse(Opts.subcommand("rv-eval", "custom evaluator that uses normal expression and random_variables")(rvEvalOpt))
         .orElse(Opts.subcommand("type-check", "type check a set of packages")(typeCheckOpt))
         .orElse(Opts.subcommand("test", "test a set of bosatsu modules")(testOpt))
         .orElse(jsonCommand)
