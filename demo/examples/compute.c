@@ -809,6 +809,53 @@ BValue ___bsts_g_Demo_l_Compute_l_factorial(BValue __bsts_b_n0) {
         alloc_boxed_pure_fn2(__bsts_t_lambda61));
 }
 
+BValue __bsts_t_lambda62(BValue __bsts_b_remaining0, BValue __bsts_b_state0) {
+    BValue __bsts_b_value0 = get_struct_index(__bsts_b_state0, 0);
+    BValue __bsts_b_steps0 = get_struct_index(__bsts_b_state0, 1);
+    BValue __bsts_a_2 = ___bsts_g_Bosatsu_l_Predef_l_cmp__Int(__bsts_b_value0,
+        bsts_integer_from_int(1));
+    if (get_variant_value(__bsts_a_2) == 2) {
+        BValue __bsts_a_1 = ___bsts_g_Bosatsu_l_Predef_l_mod__Int(__bsts_b_value0,
+            bsts_integer_from_int(2));
+        return alloc_struct2(___bsts_g_Bosatsu_l_Predef_l_add(bsts_integer_from_int(-1),
+                __bsts_b_remaining0),
+            alloc_struct2(bsts_integer_equals(__bsts_a_1, bsts_integer_from_int(0)) ?
+                    ___bsts_g_Bosatsu_l_Predef_l_div(__bsts_b_value0, bsts_integer_from_int(2)) :
+                    ___bsts_g_Bosatsu_l_Predef_l_add(bsts_integer_from_int(1),
+                        ___bsts_g_Bosatsu_l_Predef_l_add(__bsts_b_value0,
+                            ___bsts_g_Bosatsu_l_Predef_l_add(__bsts_b_value0, __bsts_b_value0))),
+                ___bsts_g_Bosatsu_l_Predef_l_add(bsts_integer_from_int(1), __bsts_b_steps0)));
+    }
+    else {
+        return alloc_struct2(___bsts_g_Bosatsu_l_Predef_l_add(bsts_integer_from_int(-1),
+                __bsts_b_remaining0),
+            alloc_struct2(__bsts_b_value0, __bsts_b_steps0));
+    }
+}
+
+BValue ___bsts_g_Demo_l_Compute_l_collatz__single(BValue __bsts_b_n0) {
+    BValue __bsts_a_3 = ___bsts_g_Bosatsu_l_Predef_l_int__loop(bsts_integer_from_int(1000),
+        alloc_struct2(__bsts_b_n0, bsts_integer_from_int(0)),
+        alloc_boxed_pure_fn2(__bsts_t_lambda62));
+    return get_struct_index(__bsts_a_3, 1);
+}
+
+BValue __bsts_t_closure63(BValue* __bstsi_slot, BValue __bsts_b_i0, BValue __bsts_b_max__steps0) {
+    BValue __bsts_b_steps0 = ___bsts_g_Demo_l_Compute_l_collatz__single(___bsts_g_Bosatsu_l_Predef_l_add(bsts_integer_from_int(1),
+            ___bsts_g_Bosatsu_l_Predef_l_sub(__bstsi_slot[0], __bsts_b_i0)));
+    BValue __bsts_a_4 = ___bsts_g_Bosatsu_l_Predef_l_cmp__Int(__bsts_b_steps0,
+        __bsts_b_max__steps0);
+    return alloc_struct2(___bsts_g_Bosatsu_l_Predef_l_add(bsts_integer_from_int(-1), __bsts_b_i0),
+        get_variant_value(__bsts_a_4) == 2 ? __bsts_b_steps0 : __bsts_b_max__steps0);
+}
+
+BValue ___bsts_g_Demo_l_Compute_l_collatz__steps(BValue __bsts_b_n0) {
+    BValue __bsts_l_captures64[1] = { __bsts_b_n0 };
+    return ___bsts_g_Bosatsu_l_Predef_l_int__loop(__bsts_b_n0,
+        bsts_integer_from_int(0),
+        alloc_closure2(1, __bsts_l_captures64, __bsts_t_closure63));
+}
+
 static _Atomic BValue ___bsts_s_Demo_l_Compute_l_main = 0;
 
 static BValue ___bsts_c_Demo_l_Compute_l_main() {
