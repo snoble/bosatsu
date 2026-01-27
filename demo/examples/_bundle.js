@@ -592,7 +592,7 @@ globalThis.Bosatsu_Prog$to_run = (_a0 => [_a0])(Bosatsu_Prog$flat_map(Bosatsu_Pr
                         _a0,
                         _a1])(_slots[0], [0])))), a_4 => Bosatsu_Prog$pure(0)))([_slots[0]])))([_slots[0]])))([arg_str]));
       })())));
-globalThis.Demo_Fibonacci$fib = n => (() => {
+globalThis.Demo_Compute$fib = n => (() => {
   const _anon0 = _int_loop(n, ((_a0, _a1) => [_a0,
       _a1])(0, 1), (i, acc) => (() => {
       const a = acc[0];
@@ -604,11 +604,23 @@ globalThis.Demo_Fibonacci$fib = n => (() => {
     })());
   return _anon0[0];
 })();
-globalThis.Demo_Fibonacci$main = (_a0 => [_a0])(Bosatsu_Prog$ignore_env((() => {
-      const result = Demo_Fibonacci$fib(20);
-      return Bosatsu_Prog$_await(Bosatsu_Prog$ignore_env(Bosatsu_Prog$println(_concat_String(((_a0, _a1) => [1,
-                _a0,
-                _a1])(_js_to_bosatsu_string("fib(20) = "), ((_a0, _a1) => [1,
-                  _a0,
-                  _a1])(_int_to_String(result), [0]))))))(a => Bosatsu_Prog$pure(0));
-    })()));
+globalThis.Demo_Compute$factorial = n => _int_loop(n, 1, (i, acc) => ((_a0, _a1) => [_a0, _a1])((-1) + i, acc * i));
+globalThis.Demo_Compute$main = (_a0 => [_a0])(Bosatsu_Prog$ignore_env(Bosatsu_Prog$pure(0)));
+globalThis.Demo_Orchestrator$validate_fib_input = n => (() => {
+  const _anon1 = (n < 0) ? [0] : (n === 0) ? [1] : [2];
+  return (_anon1[0] === 0) ? [0] : (() => {
+      const _anon0 = (n < 40) ? [0] : (n === 40) ? [1] : [2];
+      return (_anon0[0] === 2) ? [0] : [1];
+    })();
+})();
+globalThis.Demo_Orchestrator$validate_fact_input = n => (() => {
+  const _anon3 = (n < 0) ? [0] : (n === 0) ? [1] : [2];
+  return (_anon3[0] === 0) ? [0] : (() => {
+      const _anon2 = (n < 20) ? [0] : (n === 20) ? [1] : [2];
+      return (_anon2[0] === 2) ? [0] : [1];
+    })();
+})();
+globalThis.Demo_Orchestrator$compute_fib_sequence = n => Bosatsu_Predef$map_List(range(1 + n), i => ((_a0, _a1) => [_a0,
+    _a1])(i, Demo_Compute$fib(i)));
+globalThis.Demo_Orchestrator$compute_factorial_table = n => Bosatsu_Predef$map_List(range(1 + n), i => ((_a0, _a1) => [_a0,
+    _a1])(i, Demo_Compute$factorial(i)));
