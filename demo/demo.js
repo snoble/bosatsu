@@ -83,9 +83,9 @@ async function init() {
 }
 
 async function runJS(code) {
-  // The generated JS exports values with names like Demo_Fibonacci$result
+  // The generated JS exports values with names like Demo_Compute$fib
   // Package parts are joined with _ and binding name follows $
-  // So Demo/Fibonacci::result becomes Demo_Fibonacci$result
+  // So Demo/Compute::fib becomes Demo_Compute$fib
 
   // Check if code looks like generated output
   if (code.includes('// Generated JavaScript not available') || code.includes('// Run the build script')) {
@@ -94,8 +94,8 @@ async function runJS(code) {
 
   try {
     // The bundled code uses 'var' declarations which create globals
-    // Wrap in a function to evaluate and return the result
-    const fn = new Function(code + '\nreturn Demo_Fibonacci$result;');
+    // Wrap in a function to evaluate and return the result of fib(20)
+    const fn = new Function(code + '\nreturn Demo_Compute$fib(20);');
     const result = fn();
 
     // Handle Bosatsu Int representation (could be BigInt or object)
@@ -112,12 +112,12 @@ async function runJS(code) {
     // Try to evaluate and list available bindings for debugging
     try {
       const evalFn = new Function(code + `
-        // Look for any Demo_Fibonacci or result bindings
+        // Look for any Demo or Compute bindings
         const bindings = [];
         for (const key in this) {
-          if (key.includes('Demo') || key.includes('Fibonacci') || key.includes('result')) {
+          if (key.includes('Demo') || key.includes('Compute') || key.includes('fib')) {
             try {
-              bindings.push(key + ' = ' + JSON.stringify(this[key]));
+              bindings.push(key + ' = ' + (typeof this[key] === 'function' ? '[function]' : JSON.stringify(this[key])));
             } catch (e) {
               bindings.push(key + ' = [circular or complex]');
             }
