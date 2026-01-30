@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Carbon_Footprint_Calculator</title>
+  <title>Carbon Footprint</title>
   <style>
     :root {
       --bg-color: #f5f5f5;
@@ -98,15 +98,14 @@
     .why-modal.hidden { display: none; }
     .why-modal-content { background: white; border-radius: 12px; padding: 24px; max-width: 600px; max-height: 80vh; overflow-y: auto; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
     .why-modal-content h3 { margin-top: 0; color: #333; }
-    .why-modal-content .derivation { padding: 8px 12px; margin: 4px 0; border-radius: 6px; font-family: monospace; line-height: 1.6; }
+    .why-modal-content .derivation { padding: 8px 12px; margin: 4px 0; border-radius: 6px; font-family: monospace; }
     .why-modal-content .assumption { background: #e8f5e9; border-left: 3px solid #27ae60; }
     .why-modal-content .computed { background: #e3f2fd; border-left: 3px solid #2196f3; }
     .why-modal-content .conditional { background: #fff3e0; border-left: 3px solid #ff9800; }
     .why-modal-content .name { font-weight: bold; color: #333; }
-    .why-modal-content .value { color: #667eea; font-weight: bold; }
+    .why-modal-content .value { color: #667eea; }
     .why-modal-content .formula { color: #666; }
-    .why-modal-content .substituted { color: #2196f3; }
-    .why-modal-content .tag { font-size: 10px; background: #27ae60; color: white; padding: 2px 6px; border-radius: 4px; margin-left: 8px; }
+    .why-modal-content .tag { font-size: 10px; background: #27ae60; color: white; padding: 2px 6px; border-radius: 4px; }
     .why-modal-content .close-btn { margin-top: 16px; padding: 8px 16px; background: #667eea; color: white; border: none; border-radius: 6px; cursor: pointer; }
     .why-modal-content .close-btn:hover { background: #5568d8; }
     .what-if-toggle { padding: 12px; margin: 8px 0; background: #f5f5f5; border-radius: 8px; }
@@ -117,22 +116,13 @@
     .what-if-toggle .toggle-btn.active { background: #27ae60; }
     .what-if-toggle .toggle-input { padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; width: 100px; }
     .what-if-toggle .toggle-hint { color: #667eea; font-weight: bold; }
-    .assumptions-section { margin-top: 24px; }
-    .assumptions-section h3 { color: #667eea; font-size: 1.1rem; margin-bottom: 12px; }
-    .assumption-toggle { padding: 16px; margin: 12px 0; background: #f8f9ff; border-radius: 8px; border-left: 3px solid #667eea; }
-    .assumption-toggle .assumption-label { color: #333; font-weight: 500; margin-bottom: 12px; }
-    .assumption-toggle .variant-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
-    .assumption-toggle .variant-btn { padding: 8px 16px; background: #e3e7f5; color: #333; border: none; border-radius: 20px; cursor: pointer; transition: all 0.2s; }
-    .assumption-toggle .variant-btn:hover { background: #667eea; color: white; }
-    .assumption-toggle .variant-btn.active { background: #667eea; color: white; box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4); }
-
 
 
   </style>
 </head>
 <body>
   <div class="applet-container">
-    <h1 class="applet-title">Carbon_Footprint_Calculator</h1>
+    <h1 class="applet-title">Carbon Footprint</h1>
     
     <div class="controls-section" id="controls"></div>
     <div class="what-if-section" id="what-if-toggles"></div>
@@ -142,15 +132,23 @@
     // BosatsuUI Reactive Runtime
     const _state = {
       "natural_gas_therms": 50,
-      "car_miles": 12000,
+      "car_miles": undefined,
+      "car_mpg": undefined,
+      "flight_emissions": undefined,
+      "flights_per_year": undefined,
+      "electricity_factor": undefined,
+      "gas_emission_factor": undefined,
       "electricity_kwh": 900,
-      "car_mpg": 28,
-      "flights_per_year": 4
+      "gas_heat_factor": undefined
     };
     const _listeners = {
       "natural_gas_therms": [],
       "car_miles": [],
       "electricity_kwh": [],
+      "flight_emissions": [],
+      "gas_emission_factor": [],
+      "electricity_factor": [],
+      "gas_heat_factor": [],
       "car_mpg": [],
       "flights_per_year": []
     };
@@ -387,12 +385,20 @@ var Bosatsu_Prog$print = str => _env => { process.stdout.write(_bosatsu_to_js_st
 var Bosatsu_Prog$read_stdin_utf8_bytes = n => _env => [0, [0]]; // Return empty string for now
 
 
-// Derivation state tracking for inputs
+// Derivation state tracking
 // Populate derivations (object created by EmbedGenerator runtime)
+_derivations["car_emissions"] = {
+  type: "computed",
+  name: "car_emissions",
+  formula: "times(gallons_used, gas_emission_factor)",
+  valueType: "number",
+  deps: ["gallons_used", "gas_emission_factor"],
+  value: undefined
+};
 _derivations["car_miles"] = {
   type: "assumption",
   name: "car_miles",
-  formula: "car_miles",
+  formula: "12000",
   valueType: "number",
   deps: [],
   value: undefined
@@ -400,71 +406,15 @@ _derivations["car_miles"] = {
 _derivations["car_mpg"] = {
   type: "assumption",
   name: "car_mpg",
-  formula: "car_mpg",
+  formula: "28",
   valueType: "number",
   deps: [],
-  value: undefined
-};
-_derivations["flights_per_year"] = {
-  type: "assumption",
-  name: "flights_per_year",
-  formula: "flights_per_year",
-  valueType: "number",
-  deps: [],
-  value: undefined
-};
-_derivations["electricity_kwh"] = {
-  type: "assumption",
-  name: "electricity_kwh",
-  formula: "electricity_kwh",
-  valueType: "number",
-  deps: [],
-  value: undefined
-};
-_derivations["natural_gas_therms"] = {
-  type: "assumption",
-  name: "natural_gas_therms",
-  formula: "natural_gas_therms",
-  valueType: "number",
-  deps: [],
-  value: undefined
-};
-_derivations["gallons_used"] = {
-  type: "computed",
-  name: "gallons_used",
-  formula: "/.(from_Int(car_miles), from_Int(car_mpg))",
-  valueType: "number",
-  deps: ["car_miles", "car_mpg"],
-  value: undefined
-};
-_derivations["car_emissions"] = {
-  type: "computed",
-  name: "car_emissions",
-  formula: "*.(gallons_used, from_Int(20))",
-  valueType: "number",
-  deps: ["gallons_used"],
-  value: undefined
-};
-_derivations["flight_total"] = {
-  type: "computed",
-  name: "flight_total",
-  formula: "*.(from_Int(flights_per_year), from_Int(1100))",
-  valueType: "number",
-  deps: ["flights_per_year"],
-  value: undefined
-};
-_derivations["transport_total"] = {
-  type: "computed",
-  name: "transport_total",
-  formula: "+.(car_emissions, flight_total)",
-  valueType: "number",
-  deps: ["car_emissions", "flight_total"],
   value: undefined
 };
 _derivations["electricity_annual"] = {
   type: "computed",
   name: "electricity_annual",
-  formula: "*.(from_Int(electricity_kwh), from_Int(12))",
+  formula: "times(electricity_kwh, 12)",
   valueType: "number",
   deps: ["electricity_kwh"],
   value: undefined
@@ -472,209 +422,202 @@ _derivations["electricity_annual"] = {
 _derivations["electricity_emissions"] = {
   type: "computed",
   name: "electricity_emissions",
-  formula: "*.(electricity_annual, from_Int(1))",
+  formula: "times(electricity_annual, electricity_factor)",
   valueType: "number",
-  deps: ["electricity_annual"],
+  deps: ["electricity_annual", "electricity_factor"],
+  value: undefined
+};
+_derivations["electricity_factor"] = {
+  type: "assumption",
+  name: "electricity_factor",
+  formula: "1",
+  valueType: "number",
+  deps: [],
+  value: undefined
+};
+_derivations["electricity_kwh"] = {
+  type: "assumption",
+  name: "electricity_kwh",
+  formula: "900",
+  valueType: "number",
+  deps: [],
+  value: undefined
+};
+_derivations["flight_emissions"] = {
+  type: "assumption",
+  name: "flight_emissions",
+  formula: "1100",
+  valueType: "number",
+  deps: [],
+  value: undefined
+};
+_derivations["flight_total"] = {
+  type: "computed",
+  name: "flight_total",
+  formula: "times(flights_per_year, flight_emissions)",
+  valueType: "number",
+  deps: ["flights_per_year", "flight_emissions"],
+  value: undefined
+};
+_derivations["flights_per_year"] = {
+  type: "assumption",
+  name: "flights_per_year",
+  formula: "4",
+  valueType: "number",
+  deps: [],
+  value: undefined
+};
+_derivations["gallons_used"] = {
+  type: "computed",
+  name: "gallons_used",
+  formula: "div(car_miles, car_mpg)",
+  valueType: "number",
+  deps: ["car_miles", "car_mpg"],
   value: undefined
 };
 _derivations["gas_annual"] = {
   type: "computed",
   name: "gas_annual",
-  formula: "*.(from_Int(natural_gas_therms), from_Int(12))",
+  formula: "times(natural_gas_therms, 12)",
   valueType: "number",
   deps: ["natural_gas_therms"],
+  value: undefined
+};
+_derivations["gas_emission_factor"] = {
+  type: "assumption",
+  name: "gas_emission_factor",
+  formula: "20",
+  valueType: "number",
+  deps: [],
   value: undefined
 };
 _derivations["gas_emissions"] = {
   type: "computed",
   name: "gas_emissions",
-  formula: "*.(gas_annual, from_Int(12))",
+  formula: "times(gas_annual, gas_heat_factor)",
   valueType: "number",
-  deps: ["gas_annual"],
+  deps: ["gas_annual", "gas_heat_factor"],
+  value: undefined
+};
+_derivations["gas_heat_factor"] = {
+  type: "assumption",
+  name: "gas_heat_factor",
+  formula: "12",
+  valueType: "number",
+  deps: [],
   value: undefined
 };
 _derivations["home_total"] = {
   type: "computed",
   name: "home_total",
-  formula: "+.(electricity_emissions, gas_emissions)",
+  formula: "add(electricity_emissions, gas_emissions)",
   valueType: "number",
   deps: ["electricity_emissions", "gas_emissions"],
-  value: undefined
-};
-_derivations["total_footprint"] = {
-  type: "computed",
-  name: "total_footprint",
-  formula: "+.(transport_total, home_total)",
-  valueType: "number",
-  deps: ["transport_total", "home_total"],
   value: undefined
 };
 _derivations["monthly_average"] = {
   type: "computed",
   name: "monthly_average",
-  formula: "/.(total_footprint, from_Int(12))",
+  formula: "div(total_footprint, 12)",
   valueType: "number",
   deps: ["total_footprint"],
   value: undefined
 };
+_derivations["natural_gas_therms"] = {
+  type: "assumption",
+  name: "natural_gas_therms",
+  formula: "50",
+  valueType: "number",
+  deps: [],
+  value: undefined
+};
+_derivations["total_footprint"] = {
+  type: "computed",
+  name: "total_footprint",
+  formula: "add(transport_total, home_total)",
+  valueType: "number",
+  deps: ["transport_total", "home_total"],
+  value: undefined
+};
+_derivations["transport_total"] = {
+  type: "computed",
+  name: "transport_total",
+  formula: "add(car_emissions, flight_total)",
+  valueType: "number",
+  deps: ["car_emissions", "flight_total"],
+  value: undefined
+};
 
-// Function and recomputation
-
-// The compiled function from Bosatsu
-const calculate = (car_miles, car_mpg, flights_per_year, electricity_kwh, natural_gas_therms) => (() => {
-  const gallons_used = car_miles / car_mpg;
-  return (() => {
-    const car_emissions = gallons_used * 20;
-    return (() => {
-      const flight_total = flights_per_year * 1100;
-      return (() => {
-        const transport_total = car_emissions + flight_total;
-        return (() => {
-          const electricity_annual = electricity_kwh * 12;
-          return (() => {
-            const electricity_emissions = electricity_annual * 1;
-            return (() => {
-              const gas_annual = natural_gas_therms * 12;
-              return (() => {
-                const gas_emissions = gas_annual * 12;
-                return (() => {
-                  const home_total = electricity_emissions + gas_emissions;
-                  return (() => {
-                    const total_footprint = transport_total + home_total;
-                    return ((_a0, _a1, _a2, _a3, _a4, _a5, _a6, _a7, _a8, _a9, _a10) => [_a0,
-                      _a1,
-                      _a2,
-                      _a3,
-                      _a4,
-                      _a5,
-                      _a6,
-                      _a7,
-                      _a8,
-                      _a9,
-                      _a10])(gallons_used, car_emissions, flight_total, transport_total, electricity_annual, electricity_emissions, gas_annual, gas_emissions, home_total, total_footprint, total_footprint / 12);
-                  })();
-                })();
-              })();
-            })();
-          })();
-        })();
-      })();
-    })();
-  })();
-})();
-
-// Recompute by calling the function with current input values
+// Recomputation logic (replaces JsGen's const declarations)
 function _recompute() {
-  // Call the function with input values
-  const result = calculate(_getState("car_miles"), _getState("car_mpg"), _getState("flights_per_year"), _getState("electricity_kwh"), _getState("natural_gas_therms"));
+  // Read current assumption values from state
+  const car_miles = _getState('car_miles');
+  const car_mpg = _getState('car_mpg');
+  const gas_emission_factor = _getState('gas_emission_factor');
+  const electricity_kwh = _getState('electricity_kwh');
+  const electricity_factor = _getState('electricity_factor');
+  const flight_emissions = _getState('flight_emissions');
+  const flights_per_year = _getState('flights_per_year');
+  const natural_gas_therms = _getState('natural_gas_therms');
+  const gas_heat_factor = _getState('gas_heat_factor');
 
-  // Update result displays
-  console.log("calculate result:", result);
+  // Compute derived values
+  const gallons_used = Math.trunc(car_miles / car_mpg);
+  const car_emissions = (gallons_used * gas_emission_factor);
+  const electricity_annual = (electricity_kwh * 12);
+  const electricity_emissions = (electricity_annual * electricity_factor);
+  const flight_total = (flights_per_year * flight_emissions);
+  const gas_annual = (natural_gas_therms * 12);
+  const gas_emissions = (gas_annual * gas_heat_factor);
+  const home_total = (electricity_emissions + gas_emissions);
+  const transport_total = (car_emissions + flight_total);
+  const total_footprint = (transport_total + home_total);
+  const monthly_average = Math.trunc(total_footprint / 12);
 
-  // Update output displays
-  const el_gallons_used = document.getElementById('result-gallons_used');
-  if (el_gallons_used) {
-    const value = Array.isArray(result) ? result[0] : result.gallons_used;
-    el_gallons_used.querySelector('.result-value').textContent = _formatOutput(value, "number");
-  }
-  const el_car_emissions = document.getElementById('result-car_emissions');
-  if (el_car_emissions) {
-    const value = Array.isArray(result) ? result[1] : result.car_emissions;
-    el_car_emissions.querySelector('.result-value').textContent = _formatOutput(value, "number");
-  }
-  const el_flight_total = document.getElementById('result-flight_total');
-  if (el_flight_total) {
-    const value = Array.isArray(result) ? result[2] : result.flight_total;
-    el_flight_total.querySelector('.result-value').textContent = _formatOutput(value, "number");
-  }
-  const el_transport_total = document.getElementById('result-transport_total');
-  if (el_transport_total) {
-    const value = Array.isArray(result) ? result[3] : result.transport_total;
-    el_transport_total.querySelector('.result-value').textContent = _formatOutput(value, "number");
-  }
-  const el_electricity_annual = document.getElementById('result-electricity_annual');
-  if (el_electricity_annual) {
-    const value = Array.isArray(result) ? result[4] : result.electricity_annual;
-    el_electricity_annual.querySelector('.result-value').textContent = _formatOutput(value, "number");
-  }
-  const el_electricity_emissions = document.getElementById('result-electricity_emissions');
-  if (el_electricity_emissions) {
-    const value = Array.isArray(result) ? result[5] : result.electricity_emissions;
-    el_electricity_emissions.querySelector('.result-value').textContent = _formatOutput(value, "number");
-  }
-  const el_gas_annual = document.getElementById('result-gas_annual');
-  if (el_gas_annual) {
-    const value = Array.isArray(result) ? result[6] : result.gas_annual;
-    el_gas_annual.querySelector('.result-value').textContent = _formatOutput(value, "number");
-  }
-  const el_gas_emissions = document.getElementById('result-gas_emissions');
-  if (el_gas_emissions) {
-    const value = Array.isArray(result) ? result[7] : result.gas_emissions;
-    el_gas_emissions.querySelector('.result-value').textContent = _formatOutput(value, "number");
-  }
-  const el_home_total = document.getElementById('result-home_total');
-  if (el_home_total) {
-    const value = Array.isArray(result) ? result[8] : result.home_total;
-    el_home_total.querySelector('.result-value').textContent = _formatOutput(value, "number");
-  }
-  const el_total_footprint = document.getElementById('result-total_footprint');
-  if (el_total_footprint) {
-    const value = Array.isArray(result) ? result[9] : result.total_footprint;
-    el_total_footprint.querySelector('.result-value').textContent = _formatOutput(value, "number");
-  }
-  const el_monthly_average = document.getElementById('result-monthly_average');
-  if (el_monthly_average) {
-    const value = Array.isArray(result) ? result[10] : result.monthly_average;
-    el_monthly_average.querySelector('.result-value').textContent = _formatOutput(value, "number");
-  }
+  // Update all derivations and state
+  _derivations["car_miles"].value = car_miles;
+  _setState("car_miles", car_miles);
+  _derivations["car_mpg"].value = car_mpg;
+  _setState("car_mpg", car_mpg);
+  _derivations["gallons_used"].value = gallons_used;
+  _derivations["gas_emission_factor"].value = gas_emission_factor;
+  _setState("gas_emission_factor", gas_emission_factor);
+  _derivations["car_emissions"].value = car_emissions;
+  _derivations["electricity_kwh"].value = electricity_kwh;
+  _setState("electricity_kwh", electricity_kwh);
+  _derivations["electricity_annual"].value = electricity_annual;
+  _derivations["electricity_factor"].value = electricity_factor;
+  _setState("electricity_factor", electricity_factor);
+  _derivations["electricity_emissions"].value = electricity_emissions;
+  _derivations["flight_emissions"].value = flight_emissions;
+  _setState("flight_emissions", flight_emissions);
+  _derivations["flights_per_year"].value = flights_per_year;
+  _setState("flights_per_year", flights_per_year);
+  _derivations["flight_total"].value = flight_total;
+  _derivations["natural_gas_therms"].value = natural_gas_therms;
+  _setState("natural_gas_therms", natural_gas_therms);
+  _derivations["gas_annual"].value = gas_annual;
+  _derivations["gas_heat_factor"].value = gas_heat_factor;
+  _setState("gas_heat_factor", gas_heat_factor);
+  _derivations["gas_emissions"].value = gas_emissions;
+  _derivations["home_total"].value = home_total;
+  _derivations["transport_total"].value = transport_total;
+  _derivations["total_footprint"].value = total_footprint;
+  _derivations["monthly_average"].value = monthly_average;
 
-  // Update input derivations
-  if (_derivations["car_miles"]) _derivations["car_miles"].value = _getState("car_miles");
-  if (_derivations["car_mpg"]) _derivations["car_mpg"].value = _getState("car_mpg");
-  if (_derivations["flights_per_year"]) _derivations["flights_per_year"].value = _getState("flights_per_year");
-  if (_derivations["electricity_kwh"]) _derivations["electricity_kwh"].value = _getState("electricity_kwh");
-  if (_derivations["natural_gas_therms"]) _derivations["natural_gas_therms"].value = _getState("natural_gas_therms");
-
-  // Update output derivations with computed values
-  if (_derivations["gallons_used"]) _derivations["gallons_used"].value = Array.isArray(result) ? result[0] : result.gallons_used;
-  if (_derivations["car_emissions"]) _derivations["car_emissions"].value = Array.isArray(result) ? result[1] : result.car_emissions;
-  if (_derivations["flight_total"]) _derivations["flight_total"].value = Array.isArray(result) ? result[2] : result.flight_total;
-  if (_derivations["transport_total"]) _derivations["transport_total"].value = Array.isArray(result) ? result[3] : result.transport_total;
-  if (_derivations["electricity_annual"]) _derivations["electricity_annual"].value = Array.isArray(result) ? result[4] : result.electricity_annual;
-  if (_derivations["electricity_emissions"]) _derivations["electricity_emissions"].value = Array.isArray(result) ? result[5] : result.electricity_emissions;
-  if (_derivations["gas_annual"]) _derivations["gas_annual"].value = Array.isArray(result) ? result[6] : result.gas_annual;
-  if (_derivations["gas_emissions"]) _derivations["gas_emissions"].value = Array.isArray(result) ? result[7] : result.gas_emissions;
-  if (_derivations["home_total"]) _derivations["home_total"].value = Array.isArray(result) ? result[8] : result.home_total;
-  if (_derivations["total_footprint"]) _derivations["total_footprint"].value = Array.isArray(result) ? result[9] : result.total_footprint;
-  if (_derivations["monthly_average"]) _derivations["monthly_average"].value = Array.isArray(result) ? result[10] : result.monthly_average;
-
-  // Update visualization if registered
-  if (typeof _redrawVisualization === 'function') _redrawVisualization();
-}
-
-// Format an output value based on format type
-function _formatOutput(v, format) {
-  if (v === undefined || v === null) return '—';
-  switch (format) {
-    case 'currency':
-      return '$' + _formatNumber(v);
-    case 'percent':
-      return v + '%';
-    default:
-      return _formatNumber(v);
-  }
-}
-
-// Format a number with commas
-function _formatNumber(v) {
-  if (typeof v !== 'number') return String(v);
-  return v.toLocaleString();
+  // Update UI displays
+  Object.keys(_derivations).forEach(name => {
+    const el = document.getElementById('val-' + name);
+    if (el && _derivations[name].value !== undefined) {
+      el.textContent = _formatValue(_derivations[name].value);
+    }
+  });
 }
 
 // Format a value for display
 function _formatValue(v) {
   if (typeof v === 'number') {
-    return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(2);
+    return Number.isInteger(v) ? v.toString() : v.toFixed(2);
   }
   if (Array.isArray(v)) {
     // Bosatsu list/enum
@@ -685,42 +628,21 @@ function _formatValue(v) {
   return String(v);
 }
 
+// Format derivation header for "Why?" display
+function _formatDerivationHeader(d) {
+  switch (d.type) {
+    case 'assumption':
+      return '<span class="name">' + d.name + '</span> = <span class="value">' + _formatValue(d.value) + '</span> <span class="tag">assumption</span>';
+    case 'computed':
+      return '<span class="name">' + d.name + '</span> = <span class="formula">' + d.formula + '</span> → <span class="value">' + _formatValue(d.value) + '</span>';
+    case 'conditional':
+      return '<span class="name">' + d.name + '</span> = <span class="value">' + _formatValue(d.value) + '</span> <span class="tag">conditional</span>';
+    default:
+      return d.name + ' = ' + _formatValue(d.value);
+  }
+}
+
 // UI initialization
-// Add a configured input control with label, range, and default
-function addConfiguredInput(name, label, min, max, step, defaultVal, containerId) {
-  const container = document.getElementById(containerId);
-  if (!container) return;
-
-  const div = document.createElement('div');
-  div.className = 'control-group';
-
-  div.innerHTML = '<label class="control-label">' + label + ': <span class="value-display" id="' + name + '-value">' + defaultVal.toLocaleString() + '</span></label>' +
-    '<input type="range" id="' + name + '-slider" min="' + min + '" max="' + max + '" step="' + step + '" value="' + defaultVal + '">';
-
-  const slider = div.querySelector('input');
-  slider.oninput = () => {
-    const val = parseInt(slider.value);
-    document.getElementById(name + '-value').textContent = val.toLocaleString();
-    _setState(name, val);
-    _recompute();
-  };
-
-  container.appendChild(div);
-}
-
-// Add an output display with label
-function addOutputDisplay(name, label, isPrimary, containerId) {
-  const container = document.getElementById(containerId);
-  if (!container) return;
-
-  const div = document.createElement('div');
-  div.id = 'result-' + name;
-  div.className = isPrimary ? 'result-item primary' : 'result-item';
-  div.innerHTML = '<span class="result-label">' + label + ':</span> <span class="result-value">—</span>';
-
-  container.appendChild(div);
-}
-
 // Add "Why?" button next to a value display
 function addWhyButton(valueName, elementId) {
   const container = document.getElementById(elementId);
@@ -730,7 +652,7 @@ function addWhyButton(valueName, elementId) {
   btn.textContent = 'Why?';
   btn.className = 'why-button';
   btn.onclick = () => showWhyExplanation(valueName);
-  container.appendChild(btn);
+  container.parentElement.appendChild(btn);
 }
 
 // Show "Why?" modal with derivation chain
@@ -762,70 +684,60 @@ function _explainDerivation(d, depth) {
   return result;
 }
 
-// Format derivation header for "Why?" display
-function _formatDerivationHeader(d) {
-  switch (d.type) {
-    case 'assumption':
-      return '<span class="name">' + d.name + '</span> = <span class="value">' + _formatValue(d.value) + '</span> <span class="tag">input</span>';
-    case 'computed':
-      let result = '<span class="name">' + d.name + '</span> = <span class="value">' + _formatValue(d.value) + '</span>';
-      if (d.formula) {
-        result += '<br><span class="formula">Formula: ' + d.formula + '</span>';
-      }
-      result += ' <span class="tag" style="background:#2196f3">computed</span>';
-      return result;
-    case 'conditional':
-      return '<span class="name">' + d.name + '</span> = <span class="value">' + _formatValue(d.value) + '</span> <span class="tag" style="background:#ff9800">conditional</span>';
-    default:
-      return d.name + ' = ' + _formatValue(d.value);
-  }
-}
-
-// Track current assumption variants
-const _assumptions = {};
-
-// Add assumption toggle buttons
-function addAssumptionToggle(name, description, defaultVariant, buttonsHtml, containerId) {
+// Add "What if?" toggle for an assumption
+function addWhatIfToggle(name, inputType, containerId) {
   const container = document.getElementById(containerId);
   if (!container) return;
 
-  // Set default variant
-  _assumptions[name] = defaultVariant;
-
   const div = document.createElement('div');
-  div.className = 'assumption-toggle';
-  div.innerHTML = '<div class="assumption-label">' + description + '</div>' +
-    '<div class="variant-buttons">' + buttonsHtml + '</div>';
+  div.className = 'what-if-toggle';
 
-  // Add click handlers to variant buttons
-  div.querySelectorAll('.variant-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const variant = btn.dataset.variant;
-      _assumptions[name] = variant;
-
-      // Update active button state
-      div.querySelectorAll('.variant-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-
-      // Recompute with new variant
-      _recompute();
+  if (inputType === 'checkbox') {
+    div.innerHTML = '<label class="toggle-label"><span class="toggle-name">What if ' + name + ' were </span><button class="toggle-btn" data-value="true">true</button><button class="toggle-btn" data-value="false">false</button><span class="toggle-hint">?</span></label>';
+    div.querySelectorAll('.toggle-btn').forEach(btn => {
+      btn.onclick = () => {
+        const newVal = btn.dataset.value === 'true';
+        _setAssumption(name, newVal);
+        _recompute();
+      };
     });
-  });
+  } else {
+    div.innerHTML = '<label class="toggle-label"><span class="toggle-name">What if ' + name + ' were </span><input type="' + inputType + '" class="toggle-input" /><span class="toggle-hint">?</span></label>';
+    const input = div.querySelector('input');
+    input.oninput = () => {
+      const newVal = inputType === 'number' ? parseFloat(input.value) : input.value;
+      if (!isNaN(newVal) || inputType !== 'number') {
+        _setAssumption(name, newVal);
+        _recompute();
+      }
+    };
+  }
 
   container.appendChild(div);
 }
 
-// Get the current variant suffix for an assumption
-function getVariant(name) {
-  return _assumptions[name] || '';
+// Add parameter sweep slider
+function addSweepSlider(name, min, max, step, initial, containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  const div = document.createElement('div');
+  div.className = 'parameter-sweep';
+  div.innerHTML = '<div class="sweep-header"><span class="sweep-name">' + name + '</span><span class="sweep-value" id="sweep-val-' + name + '">' + initial + '</span></div><input type="range" class="sweep-slider" min="' + min + '" max="' + max + '" step="' + step + '" value="' + initial + '" /><div class="sweep-bounds"><span>' + min + '</span><span>' + max + '</span></div>';
+
+  const slider = div.querySelector('input');
+  slider.oninput = () => {
+    const val = parseFloat(slider.value);
+    document.getElementById('sweep-val-' + name).textContent = val;
+    _setAssumption(name, val);
+    _recompute();
+  };
+
+  container.appendChild(div);
 }
 
 // Initialize UI
 function init() {
-  // Get container - EmbedGenerator creates #controls for inputs
-  const controlsContainer = document.getElementById('controls');
-  const appletContainer = document.querySelector('.applet-container');
-
   // Create "Why?" modal
   const modal = document.createElement('div');
   modal.id = 'why-modal';
@@ -840,57 +752,48 @@ function init() {
     if (e.target === modal) modal.classList.add('hidden');
   };
 
-  // Create results section after controls
-  const resultsDiv = document.createElement('div');
-  resultsDiv.id = 'results';
-  resultsDiv.className = 'results-section';
-  resultsDiv.innerHTML = '<h3>Results</h3>';
-  if (controlsContainer && appletContainer) {
-    controlsContainer.after(resultsDiv);
+  // Create value displays
+  const controlsDiv = document.getElementById('controls');
+  if (controlsDiv) {
+    Object.keys(_derivations).forEach(name => {
+      const d = _derivations[name];
+      const div = document.createElement('div');
+      div.className = 'control-group';
+      div.innerHTML = '<span class="control-label">' + name + ':</span> <span class="value-display" id="val-' + name + '">' + _formatValue(d.value) + '</span>';
+      controlsDiv.appendChild(div);
+    });
   }
 
-  // Add configured input controls to #controls
-  addConfiguredInput("car_miles", "Annual car miles", 0, 50000, 1000, 12000, "controls");
-  addConfiguredInput("car_mpg", "Car fuel efficiency (MPG)", 10, 60, 2, 28, "controls");
-  addConfiguredInput("flights_per_year", "Round-trip flights per year", 0, 20, 1, 4, "controls");
-  addConfiguredInput("electricity_kwh", "Monthly electricity (kWh)", 100, 3000, 100, 900, "controls");
-  addConfiguredInput("natural_gas_therms", "Monthly natural gas (therms)", 0, 200, 10, 50, "controls");
+  // Add "Why?" buttons
+  addWhyButton("car_emissions", "val-car_emissions");
+  addWhyButton("electricity_annual", "val-electricity_annual");
+  addWhyButton("electricity_emissions", "val-electricity_emissions");
+  addWhyButton("flight_total", "val-flight_total");
+  addWhyButton("gallons_used", "val-gallons_used");
+  addWhyButton("gas_annual", "val-gas_annual");
+  addWhyButton("gas_emissions", "val-gas_emissions");
+  addWhyButton("home_total", "val-home_total");
+  addWhyButton("monthly_average", "val-monthly_average");
+  addWhyButton("total_footprint", "val-total_footprint");
+  addWhyButton("transport_total", "val-transport_total");
 
-  // Add output displays to #results
-  addOutputDisplay("gallons_used", "Gallons Used", false, "results");
-  addOutputDisplay("car_emissions", "Car Emissions (lbs)", false, "results");
-  addOutputDisplay("flight_total", "Flight Emissions (lbs)", false, "results");
-  addOutputDisplay("transport_total", "Transportation CO2 (lbs)", false, "results");
-  addOutputDisplay("electricity_annual", "Electricity Annual (kWh)", false, "results");
-  addOutputDisplay("electricity_emissions", "Electricity Emissions (lbs)", false, "results");
-  addOutputDisplay("gas_annual", "Gas Annual (therms)", false, "results");
-  addOutputDisplay("gas_emissions", "Gas Emissions (lbs)", false, "results");
-  addOutputDisplay("home_total", "Home Energy CO2 (lbs)", false, "results");
-  addOutputDisplay("total_footprint", "Annual CO2 (lbs)", true, "results");
-  addOutputDisplay("monthly_average", "Monthly CO2 (lbs)", false, "results");
+  // Add "What if?" toggles
+  addWhatIfToggle("car_miles", "number", "what-if-toggles");
+  addWhatIfToggle("car_mpg", "number", "what-if-toggles");
+  addWhatIfToggle("electricity_factor", "number", "what-if-toggles");
+  addWhatIfToggle("electricity_kwh", "number", "what-if-toggles");
+  addWhatIfToggle("flight_emissions", "number", "what-if-toggles");
+  addWhatIfToggle("flights_per_year", "number", "what-if-toggles");
+  addWhatIfToggle("gas_emission_factor", "number", "what-if-toggles");
+  addWhatIfToggle("gas_heat_factor", "number", "what-if-toggles");
+  addWhatIfToggle("natural_gas_therms", "number", "what-if-toggles");
 
-  // Add "Why?" buttons to outputs
-  addWhyButton("gallons_used", "result-gallons_used");
-  addWhyButton("car_emissions", "result-car_emissions");
-  addWhyButton("flight_total", "result-flight_total");
-  addWhyButton("transport_total", "result-transport_total");
-  addWhyButton("electricity_annual", "result-electricity_annual");
-  addWhyButton("electricity_emissions", "result-electricity_emissions");
-  addWhyButton("gas_annual", "result-gas_annual");
-  addWhyButton("gas_emissions", "result-gas_emissions");
-  addWhyButton("home_total", "result-home_total");
-  addWhyButton("total_footprint", "result-total_footprint");
-  addWhyButton("monthly_average", "result-monthly_average");
-
-
-
+  // Add parameter sweep sliders
 
 
   // Initial computation
   _recompute();
 }
-
-
 
 
     // Initialize
