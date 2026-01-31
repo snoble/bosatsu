@@ -42,12 +42,26 @@ The original hypothesis assumed V8 couldn't optimize Map traversal. However:
 
 **Archive this approach.** The existing Map-based binding system with batching is already well-optimized for typical use cases. The JIT approach would add significant complexity for marginal benefit only at extreme scales that are uncommon in real applications.
 
+### Extended Experiments (Alternative Dimensions)
+
+Tested whether other scenarios might make JIT viable:
+
+| Experiment | Approach | Result | Verdict |
+|------------|----------|--------|---------|
+| Closure overhead | Direct Array vs Map | 1.16x | ❌ Not enough |
+| Hot spot pattern | 90% hit 10% of bindings | 0.89x | ❌ Actually slower |
+| Entity batch | Update 10 fields at once | 1.00x | ❌ No benefit |
+| Frozen Object | Object.freeze() | 0.52x | ❌ **2x slower!** |
+
+**Critical Discovery**: `Object.freeze()` causes V8 deoptimization! The original benchmark used frozen objects, explaining why "generated code" was 2x slower. But even without freezing, the best speedup is only 1.16x.
+
 ### Learnings for Future
 
-1. Benchmark before building - this saved weeks of implementation work
-2. V8 is smarter than expected - don't underestimate inline caching
-3. Function closure overhead is non-trivial at small scales
-4. The "interpreter vs compiled" intuition doesn't always apply to modern JS engines
+1. **Benchmark before building** - saved weeks of implementation work
+2. **V8 is smarter than expected** - inline caching handles Map lookups extremely well
+3. **Object.freeze() hurts performance** - contrary to optimization intuition, freezing objects can deoptimize V8
+4. **Hot spots don't help** - V8's ICs already optimize repeated access patterns
+5. **The "interpreter vs compiled" intuition doesn't apply** - modern JS engines are highly optimized for dynamic patterns
 
 ---
 

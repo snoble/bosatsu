@@ -278,7 +278,11 @@ th {
     <h2>Run Benchmarks</h2>
     <button onclick="runBenchmark()">Run Benchmark</button>
     <button onclick="runAllScales()">Run All Scales (10, 100, 1000, 10000)</button>
+    <button onclick="runExperiments()" style="background: #7c3aed;">Run Experiments</button>
     <p class="progress" id="progress"></p>
+    <p style="font-size: 13px; color: #666; margin-top: 8px;">
+      <strong>Experiments</strong> test alternative dimensions: closure overhead, hot spot patterns, entity batch updates
+    </p>
   </div>
 
   <div class="card" id="results-card" style="display: none;">
