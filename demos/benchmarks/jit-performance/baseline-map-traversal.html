@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Baseline: Map Traversal Performance</title>
+  <style>
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  max-width: 800px;
+  margin: 40px auto;
+  padding: 20px;
+}
+.result { font-family: monospace; background: #f5f5f5; padding: 20px; margin: 20px 0; }
+button { padding: 12px 24px; font-size: 16px; cursor: pointer; }
+#elements { display: none; }
+  </style>
+</head>
+<body>
+  <h1>Baseline: Map Traversal</h1>
+  <p>Tests the current BosatsuUI approach: look up bindings in Map, iterate, apply updates.</p>
+
+  <div>
+    <label>Bindings: <input type="number" id="count" value="100"></label>
+    <label>Duration (ms): <input type="number" id="duration" value="2000"></label>
+    <button onclick="run()">Run Benchmark</button>
+  </div>
+
+  <div class="result" id="result">Click Run to start</div>
+  <div id="elements"></div>
+
+  <script>
+// Simulates BosatsuUI's Map-based binding lookup
+class MapTraversal {
+  constructor(count) {
+    this.bindings = {};
+    this.elementCache = new Map();
+    this.count = count;
+  }
+
+  setup(container) {
+    for (let i = 0; i < this.count; i++) {
+      const el = document.createElement('span');
+      el.id = `el-${i}`;
+      el.textContent = '0';
+      container.appendChild(el);
+
+      this.bindings[`entity.field${i}`] = [{
+        elementId: `el-${i}`,
+        property: 'textContent'
+      }];
+      this.elementCache.set(`el-${i}`, el);
+    }
+  }
+
+  update(fieldIndex, value) {
+    const path = `entity.field${fieldIndex}`;
+    const bindings = this.bindings[path];
+    if (!bindings) return;
+
+    for (const binding of bindings) {
+      const element = this.elementCache.get(binding.elementId);
+      if (element) {
+        element[binding.property] = String(value);
+      }
+    }
+  }
+}
+
+async function run() {
+  const count = parseInt(document.getElementById('count').value);
+  const duration = parseInt(document.getElementById('duration').value);
+  const container = document.getElementById('elements');
+  container.innerHTML = '';
+
+  const approach = new MapTraversal(count);
+  approach.setup(container);
+
+  // Warmup
+  for (let i = 0; i < 1000; i++) {
+    approach.update(i % count, i);
+  }
+  await new Promise(r => setTimeout(r, 50));
+
+  // Benchmark
+  let ops = 0;
+  const start = performance.now();
+  while (performance.now() - start < duration) {
+    approach.update(ops % count, ops);
+    ops++;
+  }
+  const elapsed = performance.now() - start;
+
+  const opsPerSec = (ops / elapsed) * 1000;
+  const avgMicro = (elapsed / ops) * 1000;
+
+  document.getElementById('result').innerHTML = `
+    <strong>Map Traversal Results (${count} bindings)</strong><br>
+    Operations: ${ops.toLocaleString()}<br>
+    Duration: ${elapsed.toFixed(0)}ms<br>
+    Ops/sec: ${Math.round(opsPerSec).toLocaleString()}<br>
+    Avg per op: ${avgMicro.toFixed(3)}μs
+  `;
+}
+  </script>
+</body>
+</html>

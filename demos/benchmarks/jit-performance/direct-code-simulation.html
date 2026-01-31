@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Direct Code Simulation: Generated JIT Output</title>
+  <style>
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  max-width: 800px;
+  margin: 40px auto;
+  padding: 20px;
+}
+.result { font-family: monospace; background: #f5f5f5; padding: 20px; margin: 20px 0; }
+button { padding: 12px 24px; font-size: 16px; cursor: pointer; }
+#elements { display: none; }
+.code-sample {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 16px;
+  border-radius: 6px;
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  overflow-x: auto;
+  margin: 16px 0;
+}
+.code-sample .keyword { color: #569cd6; }
+.code-sample .string { color: #ce9178; }
+.code-sample .comment { color: #6a9955; }
+  </style>
+</head>
+<body>
+  <h1>Direct Code Simulation</h1>
+  <p>Tests what JIT-generated code would look like: direct element references, no Map lookups.</p>
+
+  <div class="code-sample">
+    <span class="comment">// What the Worker JIT would generate:</span><br>
+    <span class="keyword">const</span> elements = Object.freeze({<br>
+    &nbsp;&nbsp;field0: document.getElementById(<span class="string">'gen-el-0'</span>),<br>
+    &nbsp;&nbsp;field1: document.getElementById(<span class="string">'gen-el-1'</span>),<br>
+    &nbsp;&nbsp;<span class="comment">// ... cached at generation time</span><br>
+    });<br><br>
+    <span class="keyword">export function</span> updateField0(value) {<br>
+    &nbsp;&nbsp;elements.field0.textContent = String(value);<br>
+    }
+  </div>
+
+  <div>
+    <label>Bindings: <input type="number" id="count" value="100"></label>
+    <label>Duration (ms): <input type="number" id="duration" value="2000"></label>
+    <button onclick="run()">Run Benchmark</button>
+  </div>
+
+  <div class="result" id="result">Click Run to start</div>
+  <div id="elements"></div>
+
+  <script>
+// Simulates JIT-generated code with direct element references
+class DirectCodeSimulation {
+  constructor(count) {
+    this.count = count;
+    this.elements = null;
+    this.updateFunctions = null;
+  }
+
+  setup(container) {
+    const elements = {};
+
+    // Create DOM elements
+    for (let i = 0; i < this.count; i++) {
+      const el = document.createElement('span');
+      el.id = `gen-el-${i}`;
+      el.textContent = '0';
+      container.appendChild(el);
+      elements[`field${i}`] = el;
+    }
+
+    // Freeze for V8 optimization (consistent hidden class)
+    this.elements = Object.freeze(elements);
+
+    // Generate update functions - each captures its element directly
+    // This is what the Worker JIT would produce as a module
+    this.updateFunctions = {};
+    for (let i = 0; i < this.count; i++) {
+      const el = elements[`field${i}`];
+      // Closure captures element - no lookup needed at call time
+      this.updateFunctions[i] = (value) => {
+        el.textContent = String(value);
+      };
+    }
+  }
+
+  update(fieldIndex, value) {
+    // Direct function call - V8 can inline this
+    this.updateFunctions[fieldIndex](value);
+  }
+}
+
+async function run() {
+  const count = parseInt(document.getElementById('count').value);
+  const duration = parseInt(document.getElementById('duration').value);
+  const container = document.getElementById('elements');
+  container.innerHTML = '';
+
+  const approach = new DirectCodeSimulation(count);
+  approach.setup(container);
+
+  // Warmup - let V8 optimize
+  for (let i = 0; i < 1000; i++) {
+    approach.update(i % count, i);
+  }
+  await new Promise(r => setTimeout(r, 50));
+
+  // Benchmark
+  let ops = 0;
+  const start = performance.now();
+  while (performance.now() - start < duration) {
+    approach.update(ops % count, ops);
+    ops++;
+  }
+  const elapsed = performance.now() - start;
+
+  const opsPerSec = (ops / elapsed) * 1000;
+  const avgMicro = (elapsed / ops) * 1000;
+
+  document.getElementById('result').innerHTML = `
+    <strong>Direct Code Results (${count} bindings)</strong><br>
+    Operations: ${ops.toLocaleString()}<br>
+    Duration: ${elapsed.toFixed(0)}ms<br>
+    Ops/sec: ${Math.round(opsPerSec).toLocaleString()}<br>
+    Avg per op: ${avgMicro.toFixed(3)}μs<br>
+    <br>
+    <em>Compare with baseline-map-traversal.html to see the speedup.</em>
+  `;
+}
+  </script>
+</body>
+</html>
