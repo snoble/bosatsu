@@ -2,8 +2,53 @@
 title: "feat: Runtime JIT for Map-Based UI Bindings"
 type: feat
 date: 2026-01-31
-status: experimental
+status: archived
 branch: experimental/runtime-jit
+exit-criterion: FAILED
+---
+
+## ⚠️ Exit Criterion Failed - Approach Archived
+
+**Date**: 2026-01-31
+**Decision**: Do not proceed with JIT optimization
+
+### Benchmark Results (Chrome, M-series Mac)
+
+| Bindings | Map (ops/s) | Generated (ops/s) | Speedup | Verdict |
+|----------|-------------|-------------------|---------|---------|
+| 10       | 2,317,749   | 2,428,825         | 1.05x   | ❌ NO-GO |
+| 100      | 2,056,016   | 1,034,864         | 0.50x   | ❌ NO-GO |
+| 1,000    | 945,263     | 1,037,013         | 1.10x   | ❌ NO-GO |
+| 10,000   | 516,350     | 909,010           | 1.76x   | ✅ GO |
+
+**Exit Criterion**: Speedup at 100 bindings = **0.50x** (required: ≥1.5x)
+
+### Analysis
+
+1. **At typical scales (10-1000 bindings), generated code provides no benefit**
+2. **At 100 bindings, generated code is actually 2x SLOWER than Map traversal**
+3. **Only at extreme scale (10,000 bindings) does the approach show speedup (1.76x)**
+
+### Why the Hypothesis Failed
+
+The original hypothesis assumed V8 couldn't optimize Map traversal. However:
+
+- V8's inline caches (ICs) already optimize repeated Map lookups with consistent shapes
+- The "generated code" approach adds function closure overhead (`this.updateFunctions[fieldIndex]`)
+- At small scales, this overhead exceeds any benefit from eliminating Map traversal
+- Only at very large scales (10k+) does the O(1) direct access outweigh the setup cost
+
+### Recommendation
+
+**Archive this approach.** The existing Map-based binding system with batching is already well-optimized for typical use cases. The JIT approach would add significant complexity for marginal benefit only at extreme scales that are uncommon in real applications.
+
+### Learnings for Future
+
+1. Benchmark before building - this saved weeks of implementation work
+2. V8 is smarter than expected - don't underestimate inline caching
+3. Function closure overhead is non-trivial at small scales
+4. The "interpreter vs compiled" intuition doesn't always apply to modern JS engines
+
 ---
 
 # feat: Runtime JIT for Map-Based UI Bindings
@@ -219,17 +264,19 @@ Generated code follows V8 best practices:
 
 ## Implementation Phases
 
-### Phase 1: Infrastructure (Benchmark Harness)
+### Phase 1: Infrastructure (Benchmark Harness) ✅ COMPLETE
 
 **Goal**: Measure baseline, establish methodology
 
-- [ ] Create benchmark harness (`demos/benchmarks/jit-performance/`)
-  - [ ] `baseline-map-traversal.html` - current runtime performance
-  - [ ] `direct-code-simulation.html` - simulated generated code
-  - [ ] `benchmark-runner.js` - automated comparison
-- [ ] Measure at 10, 100, 1000, 10000 bindings
-- [ ] Document baseline numbers
-- [ ] **Exit criterion**: If simulated speedup <1.5x at 100 bindings, reconsider approach
+- [x] Create benchmark harness (`demos/benchmarks/jit-performance/`)
+  - [x] `baseline-map-traversal.html` - current runtime performance
+  - [x] `direct-code-simulation.html` - simulated generated code
+  - [x] `benchmark-runner.js` - automated comparison
+- [x] Measure at 10, 100, 1000, 10000 bindings
+- [x] Document baseline numbers (see results above)
+- [x] **Exit criterion**: Speedup at 100 bindings = 0.50x < 1.5x threshold → **FAILED**
+
+**Result**: Exit criterion not met. Approach archived.
 
 **Files**:
 - `demos/benchmarks/jit-performance/index.html`
@@ -237,7 +284,7 @@ Generated code follows V8 best practices:
 - `demos/benchmarks/jit-performance/direct-code-simulation.html`
 - `demos/benchmarks/jit-performance/benchmark-runner.js`
 
-### Phase 2: Stats Collection
+### Phase 2: Stats Collection ⏭️ SKIPPED (Exit criterion failed)
 
 **Goal**: Collect binding access patterns without affecting performance
 
@@ -253,7 +300,7 @@ Generated code follows V8 best practices:
 - `core/src/main/resources/bosatsu-jit-stats.js`
 - Edit `core/src/main/resources/bosatsu-ui-runtime.js`
 
-### Phase 3: Worker JIT Compiler
+### Phase 3: Worker JIT Compiler ⏭️ SKIPPED (Exit criterion failed)
 
 **Goal**: Generate optimized code in background thread
 
@@ -268,7 +315,7 @@ Generated code follows V8 best practices:
 **Files**:
 - `core/src/main/resources/bosatsu-jit-worker.js`
 
-### Phase 4: Integration Layer
+### Phase 4: Integration Layer ⏭️ SKIPPED (Exit criterion failed)
 
 **Goal**: Hot-swap handlers, manage Blob URLs
 
@@ -285,7 +332,7 @@ Generated code follows V8 best practices:
 - `core/src/main/resources/bosatsu-jit-integration.js`
 - Edit `core/src/main/resources/bosatsu-ui-runtime.js`
 
-### Phase 5: Invalidation & Error Handling
+### Phase 5: Invalidation & Error Handling ⏭️ SKIPPED (Exit criterion failed)
 
 **Goal**: Handle element removal, stale handlers
 
@@ -299,7 +346,7 @@ Generated code follows V8 best practices:
 - Edit `core/src/main/resources/bosatsu-jit-worker.js`
 - Edit `core/src/main/resources/bosatsu-jit-integration.js`
 
-### Phase 6: Validation & Documentation
+### Phase 6: Validation & Documentation ⏭️ SKIPPED (Exit criterion failed)
 
 **Goal**: Prove value, document findings
 
@@ -313,7 +360,7 @@ Generated code follows V8 best practices:
 - Update `docs/brainstorms/2026-01-31-runtime-jit-for-map-based-ui-brainstorm.md`
 - `docs/performance/jit-benchmark-results.md`
 
-### Phase 7: Compositional Generator Correctness Proof
+### Phase 7: Compositional Generator Correctness Proof ⏭️ SKIPPED (Exit criterion failed)
 
 **Goal**: Structure the generator as composable pieces, each trivially provable, with composition preserving type safety.
 
