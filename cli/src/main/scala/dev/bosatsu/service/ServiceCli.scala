@@ -216,7 +216,7 @@ $stats
         .flatMap { source =>
           ServiceBuilder.compileHandlers(source, sourceFile.toString) match {
             case Left(err) =>
-              IO.println(s"Compilation failed: $err").as(ExitCode.Error)
+              IO(System.err.println(s"Compilation failed: $err")).as(ExitCode.Error)
 
             case Right(handlers) =>
               // Write to stderr, not stdout - MCP uses stdout for JSON-RPC
@@ -225,7 +225,7 @@ $stats
           }
         }
         .handleErrorWith { err =>
-          IO.println(s"Error: ${err.getMessage}").as(ExitCode.Error)
+          IO(System.err.println(s"Error: ${err.getMessage}")).as(ExitCode.Error)
         }
     }
   }

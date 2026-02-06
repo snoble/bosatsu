@@ -74,6 +74,8 @@ object TlaCli {
           ExitCode.Success
       }
       }
+    }.handleErrorWith { err =>
+      IO(System.err.println(s"Error: ${err.getMessage}")).as(ExitCode.Error)
     }
   }
 
@@ -124,6 +126,8 @@ object TlaCli {
 
           ExitCode.Error
       }
+    }.handleErrorWith { err =>
+      IO(System.err.println(s"Error: ${err.getMessage}")).as(ExitCode.Error)
     }
   }
 
@@ -199,6 +203,8 @@ object TlaCli {
           }
       }
       }
+    }.handleErrorWith { err =>
+      IO(System.err.println(s"Error: ${err.getMessage}")).as(ExitCode.Error)
     }
   }
 
