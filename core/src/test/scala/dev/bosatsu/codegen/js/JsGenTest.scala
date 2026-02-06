@@ -861,4 +861,341 @@ class JsGenTest extends ScalaCheckSuite {
     assert(result.contains("commands"), s"Expected 'commands' key, got: $result")
     assert(result.contains("_bosatsu_list_to_array"), s"Expected list-to-array conversion, got: $result")
   }
+
+  // ==================
+  // Missing UIExternal Tests
+  // ==================
+
+  test("UIExternal state generates _ui_create_state call") {
+    val initial = Literal(Lit.Integer(0))
+    val expr = App(uiGlobal("state"), NonEmptyList.one(initial))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("_ui_create_state"), s"Expected _ui_create_state call, got: $result")
+  }
+
+  test("UIExternal h generates element VNode object") {
+    val tag = Literal(Lit.Str("div"))
+    val props = Local(bindable("myProps"))
+    val children = Local(bindable("myChildren"))
+    val expr = App(uiGlobal("h"), NonEmptyList.of(tag, props, children))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"element\""), s"Expected element type, got: $result")
+    assert(result.contains("tag"), s"Expected 'tag' key, got: $result")
+    assert(result.contains("props"), s"Expected 'props' key, got: $result")
+    assert(result.contains("children"), s"Expected 'children' key, got: $result")
+  }
+
+  test("UIExternal text generates text VNode object") {
+    val content = Literal(Lit.Str("hello"))
+    val expr = App(uiGlobal("text"), NonEmptyList.one(content))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"text\""), s"Expected text type, got: $result")
+    assert(result.contains("_bosatsu_to_js_string"), s"Expected string conversion, got: $result")
+  }
+
+  test("UIExternal fragment generates fragment VNode object") {
+    val children = Local(bindable("myChildren"))
+    val expr = App(uiGlobal("fragment"), NonEmptyList.one(children))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"fragment\""), s"Expected fragment type, got: $result")
+    assert(result.contains("children"), s"Expected 'children' key, got: $result")
+  }
+
+  test("UIExternal on_change generates handler registration with change") {
+    val handler = Local(bindable("myHandler"))
+    val expr = App(uiGlobal("on_change"), NonEmptyList.one(handler))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("data-onchange"), s"Expected data-onchange attribute, got: $result")
+    assert(result.contains("_ui_register_handler"), s"Expected handler registration call, got: $result")
+    assert(result.contains("\"change\""), s"Expected change event type, got: $result")
+  }
+
+  test("UIExternal on_keyup generates handler registration with keyup") {
+    val handler = Local(bindable("myHandler"))
+    val expr = App(uiGlobal("on_keyup"), NonEmptyList.one(handler))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("data-onkeyup"), s"Expected data-onkeyup attribute, got: $result")
+    assert(result.contains("_ui_register_handler"), s"Expected handler registration call, got: $result")
+    assert(result.contains("\"keyup\""), s"Expected keyup event type, got: $result")
+  }
+
+  test("UIExternal on_dragover generates handler registration with dragover") {
+    val handler = Local(bindable("myHandler"))
+    val expr = App(uiGlobal("on_dragover"), NonEmptyList.one(handler))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("data-ondragover"), s"Expected data-ondragover attribute, got: $result")
+    assert(result.contains("_ui_register_handler"), s"Expected handler registration call, got: $result")
+    assert(result.contains("\"dragover\""), s"Expected dragover event type, got: $result")
+  }
+
+  test("UIExternal on_drop generates handler registration with drop") {
+    val handler = Local(bindable("myHandler"))
+    val expr = App(uiGlobal("on_drop"), NonEmptyList.one(handler))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("data-ondrop"), s"Expected data-ondrop attribute, got: $result")
+    assert(result.contains("_ui_register_handler"), s"Expected handler registration call, got: $result")
+    assert(result.contains("\"drop\""), s"Expected drop event type, got: $result")
+  }
+
+  test("UIExternal list_remove_at generates _ui_list_remove_at call") {
+    val listState = Local(bindable("myListState"))
+    val index = Literal(Lit.Integer(2))
+    val expr = App(uiGlobal("list_remove_at"), NonEmptyList.of(listState, index))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("_ui_list_remove_at"), s"Expected _ui_list_remove_at call, got: $result")
+    assert(result.contains("myListState"), s"Expected list state argument, got: $result")
+  }
+
+  test("UIExternal list_update_at generates _ui_list_update_at call") {
+    val listState = Local(bindable("myListState"))
+    val index = Literal(Lit.Integer(1))
+    val item = Literal(Lit.Integer(99))
+    val expr = App(uiGlobal("list_update_at"), NonEmptyList.of(listState, index, item))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("_ui_list_update_at"), s"Expected _ui_list_update_at call, got: $result")
+    assert(result.contains("myListState"), s"Expected list state argument, got: $result")
+  }
+
+  test("UIExternal list_length generates property access on items.length") {
+    val listState = Local(bindable("myListState"))
+    val expr = App(uiGlobal("list_length"), NonEmptyList.one(listState))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("items"), s"Expected items property access, got: $result")
+    assert(result.contains("length"), s"Expected length property access, got: $result")
+  }
+
+  // ==================
+  // Missing CanvasExternal Tests
+  // ==================
+
+  test("CanvasExternal text_cmd generates tagged object with type text") {
+    val content = Literal(Lit.Str("Hello"))
+    val x = Literal(Lit.Integer(10))
+    val y = Literal(Lit.Integer(20))
+    val expr = App(canvasGlobal("text_cmd"), NonEmptyList.of(content, x, y))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"text\""), s"Expected type 'text', got: $result")
+    assert(result.contains("_bosatsu_to_js_string"), s"Expected string conversion, got: $result")
+  }
+
+  test("CanvasExternal arc generates tagged object with type arc") {
+    val x = Literal(Lit.Integer(50))
+    val y = Literal(Lit.Integer(50))
+    val r = Literal(Lit.Integer(25))
+    val start = Literal(Lit.Integer(0))
+    val end = Literal(Lit.Integer(3))
+    val expr = App(canvasGlobal("arc"), NonEmptyList.of(x, y, r, start, end))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"arc\""), s"Expected type 'arc', got: $result")
+    assert(result.contains("start"), s"Expected 'start' key, got: $result")
+    assert(result.contains("end"), s"Expected 'end' key, got: $result")
+  }
+
+  test("CanvasExternal line_width generates tagged object with type lineWidth") {
+    val width = Literal(Lit.Integer(3))
+    val expr = App(canvasGlobal("line_width"), NonEmptyList.one(width))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"lineWidth\""), s"Expected type 'lineWidth', got: $result")
+    assert(result.contains("width"), s"Expected 'width' key, got: $result")
+  }
+
+  // ==================
+  // Missing NumericExternal Function Tests
+  // ==================
+
+  test("NumericExternal double_to_String generates _js_to_bosatsu_string call") {
+    val arg = Local(bindable("myDouble"))
+    val expr = App(numericGlobal("double_to_String"), NonEmptyList.one(arg))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("_js_to_bosatsu_string"), s"Expected _js_to_bosatsu_string call, got: $result")
+    assert(result.contains("String"), s"Expected String conversion, got: $result")
+  }
+
+  test("NumericExternal string_to_Double generates parseFloat call") {
+    val arg = Local(bindable("myStr"))
+    val expr = App(numericGlobal("string_to_Double"), NonEmptyList.one(arg))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("parseFloat"), s"Expected parseFloat call, got: $result")
+    assert(result.contains("_bosatsu_to_js_string"), s"Expected _bosatsu_to_js_string call, got: $result")
+  }
+
+  test("NumericExternal sin generates Math.sin call") {
+    val arg = Local(bindable("angle"))
+    val expr = App(numericGlobal("sin"), NonEmptyList.one(arg))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("Math.sin"), s"Expected Math.sin call, got: $result")
+  }
+
+  test("NumericExternal cos generates Math.cos call") {
+    val arg = Local(bindable("angle"))
+    val expr = App(numericGlobal("cos"), NonEmptyList.one(arg))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("Math.cos"), s"Expected Math.cos call, got: $result")
+  }
+
+  test("NumericExternal tan generates Math.tan call") {
+    val arg = Local(bindable("angle"))
+    val expr = App(numericGlobal("tan"), NonEmptyList.one(arg))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("Math.tan"), s"Expected Math.tan call, got: $result")
+  }
+
+  test("NumericExternal sqrt generates Math.sqrt call") {
+    val arg = Local(bindable("n"))
+    val expr = App(numericGlobal("sqrt"), NonEmptyList.one(arg))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("Math.sqrt"), s"Expected Math.sqrt call, got: $result")
+  }
+
+  test("NumericExternal pow generates Math.pow call") {
+    val base = Local(bindable("base"))
+    val exp = Local(bindable("exp"))
+    val expr = App(numericGlobal("pow"), NonEmptyList.of(base, exp))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("Math.pow"), s"Expected Math.pow call, got: $result")
+  }
+
+  test("NumericExternal exp generates Math.exp call") {
+    val arg = Local(bindable("x"))
+    val expr = App(numericGlobal("exp"), NonEmptyList.one(arg))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("Math.exp"), s"Expected Math.exp call, got: $result")
+  }
+
+  test("NumericExternal log generates Math.log call") {
+    val arg = Local(bindable("x"))
+    val expr = App(numericGlobal("log"), NonEmptyList.one(arg))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("Math.log"), s"Expected Math.log call, got: $result")
+  }
+
+  test("NumericExternal floor generates Math.floor call") {
+    val arg = Local(bindable("x"))
+    val expr = App(numericGlobal("floor"), NonEmptyList.one(arg))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("Math.floor"), s"Expected Math.floor call, got: $result")
+  }
+
+  test("NumericExternal ceil generates Math.ceil call") {
+    val arg = Local(bindable("x"))
+    val expr = App(numericGlobal("ceil"), NonEmptyList.one(arg))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("Math.ceil"), s"Expected Math.ceil call, got: $result")
+  }
+
+  test("NumericExternal round generates Math.round call") {
+    val arg = Local(bindable("x"))
+    val expr = App(numericGlobal("round"), NonEmptyList.one(arg))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("Math.round"), s"Expected Math.round call, got: $result")
+  }
+
+  test("NumericExternal random_range generates Math.random with range") {
+    val min = Local(bindable("minVal"))
+    val max = Local(bindable("maxVal"))
+    val expr = App(numericGlobal("random_range"), NonEmptyList.of(min, max))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("Math.random()"), s"Expected Math.random() call, got: $result")
+  }
+
+  test("NumericExternal min_Double generates Math.min call") {
+    val a = Local(bindable("a"))
+    val b = Local(bindable("b"))
+    val expr = App(numericGlobal("min_Double"), NonEmptyList.of(a, b))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("Math.min"), s"Expected Math.min call, got: $result")
+  }
+
+  test("NumericExternal max_Double generates Math.max call") {
+    val a = Local(bindable("a"))
+    val b = Local(bindable("b"))
+    val expr = App(numericGlobal("max_Double"), NonEmptyList.of(a, b))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("Math.max"), s"Expected Math.max call, got: $result")
+  }
+
+  // ==================
+  // Numeric Constants Tests
+  // ==================
+
+  test("NumericExternal pi constant renders as Math.PI") {
+    val expr: Matchless.Expr[Unit] = Matchless.Global((), NumericPackage, Name("pi"))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("Math.PI"), s"Expected Math.PI, got: $result")
+  }
+
+  test("NumericExternal e_const constant renders as Math.E") {
+    val expr: Matchless.Expr[Unit] = Matchless.Global((), NumericPackage, Name("e_const"))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("Math.E"), s"Expected Math.E, got: $result")
+  }
+
+  // ==================
+  // Standalone Reference Tests (intrinsic used as value, not called)
+  // ==================
+
+  test("IOExternal standalone reference wraps in lambda") {
+    // When pure is used as a value (not applied), it should become a lambda
+    val expr: Matchless.Expr[Unit] = ioGlobal("pure")
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("=>"), s"Expected arrow function for standalone IO ref, got: $result")
+  }
+
+  test("UIExternal standalone reference wraps in lambda") {
+    val expr: Matchless.Expr[Unit] = uiGlobal("on_click")
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("=>"), s"Expected arrow function for standalone UI ref, got: $result")
+  }
+
+  test("CanvasExternal standalone reference wraps in lambda") {
+    val expr: Matchless.Expr[Unit] = canvasGlobal("circle")
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("=>"), s"Expected arrow function for standalone Canvas ref, got: $result")
+  }
+
+  // ==================
+  // intrinsicValues Tests
+  // ==================
+
+  test("intrinsicValues includes all package externals") {
+    val values = JsGen.intrinsicValues
+    assert(values.contains(PackageName.PredefName), "Missing Predef package")
+    assert(values.contains(JsGen.NumericExternal.NumericPackage), "Missing Numeric package")
+    assert(values.contains(JsGen.IOExternal.IOPackage), "Missing IO package")
+    assert(values.contains(JsGen.UIExternal.UIPackage), "Missing UI package")
+    assert(values.contains(JsGen.CanvasExternal.CanvasPackage), "Missing Canvas package")
+  }
+
+  test("intrinsicValues Numeric includes constants") {
+    val values = JsGen.intrinsicValues
+    val numericNames = values(JsGen.NumericExternal.NumericPackage)
+    assert(numericNames.contains(Name("pi")), "Missing pi constant")
+    assert(numericNames.contains(Name("e_const")), "Missing e_const constant")
+  }
+
+  test("intrinsicValues UI includes all event handlers") {
+    val values = JsGen.intrinsicValues
+    val uiNames = values(JsGen.UIExternal.UIPackage)
+    assert(uiNames.contains(Name("on_click")), "Missing on_click")
+    assert(uiNames.contains(Name("on_keydown")), "Missing on_keydown")
+    assert(uiNames.contains(Name("on_keyup")), "Missing on_keyup")
+    assert(uiNames.contains(Name("on_dragstart")), "Missing on_dragstart")
+    assert(uiNames.contains(Name("on_dragover")), "Missing on_dragover")
+    assert(uiNames.contains(Name("on_drop")), "Missing on_drop")
+    assert(uiNames.contains(Name("list_state")), "Missing list_state")
+    assert(uiNames.contains(Name("on_frame")), "Missing on_frame")
+  }
+
+  test("intrinsicValues Canvas includes all drawing commands") {
+    val values = JsGen.intrinsicValues
+    val canvasNames = values(JsGen.CanvasExternal.CanvasPackage)
+    assert(canvasNames.contains(Name("circle")), "Missing circle")
+    assert(canvasNames.contains(Name("rect")), "Missing rect")
+    assert(canvasNames.contains(Name("line")), "Missing line")
+    assert(canvasNames.contains(Name("text_cmd")), "Missing text_cmd")
+    assert(canvasNames.contains(Name("arc")), "Missing arc")
+    assert(canvasNames.contains(Name("fill")), "Missing fill")
+    assert(canvasNames.contains(Name("stroke")), "Missing stroke")
+    assert(canvasNames.contains(Name("canvas_render")), "Missing canvas_render")
+  }
 }

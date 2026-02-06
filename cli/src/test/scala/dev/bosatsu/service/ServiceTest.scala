@@ -1457,6 +1457,245 @@ def nested(a: Int, b: Int, c: Int) -> Int:
     assertEquals(body.hcursor.downField("canBatch").as[Boolean], Right(true))
   }
 
+  // ==========================================================================
+  // ServiceCli action run methods (IO tests)
+  // ==========================================================================
+
+  test("ServiceCli.run - help output returns Error exit code") {
+    val exitCode = ServiceCli.run(List.empty).unsafeRunSync()
+    assertEquals(exitCode, cats.effect.ExitCode.Error)
+  }
+
+  test("ServiceCli.run - analyze with valid file returns Success") {
+    // Create a temp bosatsu file
+    val tmpFile = java.io.File.createTempFile("test_analyze_", ".bosatsu")
+    try {
+      val content = """
+package AnalyzeTest
+
+def handler(x: Int) -> Int:
+  x
+"""
+      java.nio.file.Files.writeString(tmpFile.toPath, content)
+      val exitCode = ServiceCli.run(List("analyze", tmpFile.getAbsolutePath)).unsafeRunSync()
+      assertEquals(exitCode, cats.effect.ExitCode.Success)
+    } finally {
+      tmpFile.delete()
+    }
+  }
+
+  test("ServiceCli.run - analyze with --json returns Success") {
+    val tmpFile = java.io.File.createTempFile("test_json_", ".bosatsu")
+    try {
+      val content = """
+package JsonTest
+
+def handler(x: Int) -> Int:
+  x
+"""
+      java.nio.file.Files.writeString(tmpFile.toPath, content)
+      val exitCode = ServiceCli.run(List("analyze", tmpFile.getAbsolutePath, "--json")).unsafeRunSync()
+      assertEquals(exitCode, cats.effect.ExitCode.Success)
+    } finally {
+      tmpFile.delete()
+    }
+  }
+
+  test("ServiceCli.run - analyze with --function filter matching") {
+    val tmpFile = java.io.File.createTempFile("test_func_", ".bosatsu")
+    try {
+      val content = """
+package FuncTest
+
+def target(x: Int) -> Int:
+  x
+"""
+      java.nio.file.Files.writeString(tmpFile.toPath, content)
+      val exitCode = ServiceCli.run(List("analyze", tmpFile.getAbsolutePath, "--function", "target")).unsafeRunSync()
+      assertEquals(exitCode, cats.effect.ExitCode.Success)
+    } finally {
+      tmpFile.delete()
+    }
+  }
+
+  test("ServiceCli.run - analyze with --function filter not matching returns Error") {
+    val tmpFile = java.io.File.createTempFile("test_nofunc_", ".bosatsu")
+    try {
+      val content = """
+package NoFuncTest
+
+def handler(x: Int) -> Int:
+  x
+"""
+      java.nio.file.Files.writeString(tmpFile.toPath, content)
+      val exitCode = ServiceCli.run(List("analyze", tmpFile.getAbsolutePath, "--function", "nonexistent")).unsafeRunSync()
+      assertEquals(exitCode, cats.effect.ExitCode.Error)
+    } finally {
+      tmpFile.delete()
+    }
+  }
+
+  test("ServiceCli.run - analyze with nonexistent file returns Error") {
+    val exitCode = ServiceCli.run(List("analyze", "/nonexistent/file.bosatsu")).unsafeRunSync()
+    assertEquals(exitCode, cats.effect.ExitCode.Error)
+  }
+
+  test("ServiceCli.run - analyze with parse error returns Error") {
+    val tmpFile = java.io.File.createTempFile("test_parse_err_", ".bosatsu")
+    try {
+      val content = """
+package BadParse
+
+def broken(
+"""
+      java.nio.file.Files.writeString(tmpFile.toPath, content)
+      val exitCode = ServiceCli.run(List("analyze", tmpFile.getAbsolutePath)).unsafeRunSync()
+      assertEquals(exitCode, cats.effect.ExitCode.Error)
+    } finally {
+      tmpFile.delete()
+    }
+  }
+
+  test("ServiceCli.run - validate with valid file returns Success") {
+    val tmpFile = java.io.File.createTempFile("test_validate_", ".bosatsu")
+    try {
+      val content = """
+package ValidateTest
+
+def handler(x: Int) -> Int:
+  x
+"""
+      java.nio.file.Files.writeString(tmpFile.toPath, content)
+      val exitCode = ServiceCli.run(List("validate", tmpFile.getAbsolutePath)).unsafeRunSync()
+      assertEquals(exitCode, cats.effect.ExitCode.Success)
+    } finally {
+      tmpFile.delete()
+    }
+  }
+
+  test("ServiceCli.run - validate with invalid file returns Error") {
+    val tmpFile = java.io.File.createTempFile("test_validate_bad_", ".bosatsu")
+    try {
+      val content = """
+package BadValidate
+
+def broken(
+"""
+      java.nio.file.Files.writeString(tmpFile.toPath, content)
+      val exitCode = ServiceCli.run(List("validate", tmpFile.getAbsolutePath)).unsafeRunSync()
+      assertEquals(exitCode, cats.effect.ExitCode.Error)
+    } finally {
+      tmpFile.delete()
+    }
+  }
+
+  test("ServiceCli.run - validate with nonexistent file returns Error") {
+    val exitCode = ServiceCli.run(List("validate", "/nonexistent/file.bosatsu")).unsafeRunSync()
+    assertEquals(exitCode, cats.effect.ExitCode.Error)
+  }
+
+  test("ServiceCli.run - build with valid file returns Success") {
+    val tmpFile = java.io.File.createTempFile("test_build_", ".bosatsu")
+    val tmpDir = java.io.File.createTempFile("test_build_out_", "")
+    tmpDir.delete()  // Remove file so it can be created as directory
+    try {
+      val content = """
+package BuildTest
+
+def handler(x: Int) -> Int:
+  x
+"""
+      java.nio.file.Files.writeString(tmpFile.toPath, content)
+      val exitCode = ServiceCli.run(List("build", tmpFile.getAbsolutePath, "--output", tmpDir.getAbsolutePath)).unsafeRunSync()
+      assertEquals(exitCode, cats.effect.ExitCode.Success)
+    } finally {
+      tmpFile.delete()
+      // Clean up output directory
+      if (tmpDir.exists()) {
+        tmpDir.listFiles().foreach(_.delete())
+        tmpDir.delete()
+      }
+    }
+  }
+
+  test("ServiceCli.run - build with parse error returns Error") {
+    val tmpFile = java.io.File.createTempFile("test_build_bad_", ".bosatsu")
+    try {
+      val content = """
+package BadBuild
+
+def broken(
+"""
+      java.nio.file.Files.writeString(tmpFile.toPath, content)
+      val exitCode = ServiceCli.run(List("build", tmpFile.getAbsolutePath)).unsafeRunSync()
+      assertEquals(exitCode, cats.effect.ExitCode.Error)
+    } finally {
+      tmpFile.delete()
+    }
+  }
+
+  test("ServiceCli.run - build with nonexistent file returns Error") {
+    val exitCode = ServiceCli.run(List("build", "/nonexistent/file.bosatsu")).unsafeRunSync()
+    assertEquals(exitCode, cats.effect.ExitCode.Error)
+  }
+
+  test("ServiceCli.run - analyze with type error returns Error") {
+    val tmpFile = java.io.File.createTempFile("test_type_err_", ".bosatsu")
+    try {
+      val content = """
+package TypeError
+
+def broken(x: String) -> Int:
+  x
+"""
+      java.nio.file.Files.writeString(tmpFile.toPath, content)
+      val exitCode = ServiceCli.run(List("analyze", tmpFile.getAbsolutePath)).unsafeRunSync()
+      assertEquals(exitCode, cats.effect.ExitCode.Error)
+    } finally {
+      tmpFile.delete()
+    }
+  }
+
+  // ==========================================================================
+  // AnalyzeAction.formatAnalyses coverage (exercised through run method)
+  // ==========================================================================
+
+  test("ServiceCli.run - analyze text output exercises formatAnalyses") {
+    // This test exercises the formatAnalyses code path (non-JSON output)
+    val tmpFile = java.io.File.createTempFile("test_format_", ".bosatsu")
+    try {
+      val content = """
+package FormatTest
+
+def compute(x: Int) -> Int:
+  y = x.add(1)
+  y
+"""
+      java.nio.file.Files.writeString(tmpFile.toPath, content)
+      // Without --json flag, uses formatAnalyses
+      val exitCode = ServiceCli.run(List("analyze", tmpFile.getAbsolutePath)).unsafeRunSync()
+      assertEquals(exitCode, cats.effect.ExitCode.Success)
+    } finally {
+      tmpFile.delete()
+    }
+  }
+
+  test("ServiceCli.run - analyze with no handlers returns Error") {
+    val tmpFile = java.io.File.createTempFile("test_nohandlers_", ".bosatsu")
+    try {
+      val content = """
+package NoHandlers
+
+x = 42
+"""
+      java.nio.file.Files.writeString(tmpFile.toPath, content)
+      val exitCode = ServiceCli.run(List("analyze", tmpFile.getAbsolutePath)).unsafeRunSync()
+      assertEquals(exitCode, cats.effect.ExitCode.Error)
+    } finally {
+      tmpFile.delete()
+    }
+  }
+
   test("HttpServer.apiRoutes - GET /handlers/:name/analysis includes operations") {
     val ops = List(
       ServiceOperation("DB", "query", OperationKind.Read, true, Some("queryMany")),

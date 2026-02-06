@@ -314,7 +314,7 @@ object TlcRunner {
     }
   }
 
-  private def runTlc(tlcCmd: String, specFile: Path, options: TlcOptions): TlcResult = {
+  private[tla] def runTlc(tlcCmd: String, specFile: Path, options: TlcOptions): TlcResult = {
     val args = List.newBuilder[String]
     args ++= tlcCmd.split(" ")
 
@@ -354,7 +354,7 @@ object TlcRunner {
     }
   }
 
-  private def parseOutput(exitCode: Int, stdout: String, stderr: String): TlcResult = {
+  private[tla] def parseOutput(exitCode: Int, stdout: String, stderr: String): TlcResult = {
     val output = stdout + "\n" + stderr
 
     // Parse states generated
@@ -397,7 +397,7 @@ object TlcRunner {
     )
   }
 
-  private def parseErrorTrace(output: String): List[TlcTraceState] = {
+  private[tla] def parseErrorTrace(output: String): List[TlcTraceState] = {
     val statePattern = """State (\d+):(.+?)(?=State \d+:|$)""".r
     statePattern.findAllMatchIn(output).map { m =>
       TlcTraceState(
@@ -408,7 +408,7 @@ object TlcRunner {
     }.toList
   }
 
-  private def extractErrorMessage(output: String): String = {
+  private[tla] def extractErrorMessage(output: String): String = {
     // Try to find the most relevant error message
     val lines = output.split("\n")
     lines.find(_.contains("Error:"))
