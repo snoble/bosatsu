@@ -63,7 +63,9 @@ object ServiceBuilder {
                         case Some((_, matchlessExpr)) =>
                           JsGen.renderBinding(name, matchlessExpr)
                         case None =>
-                          // Define a placeholder function to avoid ReferenceError
+                          // Placeholder function that throws at invocation time.
+                          // This can only happen if the Matchless IR drops a binding (e.g., dead code elimination).
+                          // The placeholder avoids a JS ReferenceError and gives a clear error message instead.
                           s"const ${name.asString} = () => { throw new Error('Handler ${name.asString} not compiled'); };"
                       }
 

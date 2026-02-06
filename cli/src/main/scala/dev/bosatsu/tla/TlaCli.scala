@@ -86,7 +86,7 @@ object TlaCli {
     file: Path,
     workers: Int,
     depth: Option[Int],
-    timeout: Option[Int]
+    timeout: Option[Int]  // Stored in TlcOptions for future use; TLC itself handles timeouts
   ) extends TlaAction {
     def run: IO[ExitCode] = IO {
       val options = TlcOptions(

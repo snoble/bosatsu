@@ -799,6 +799,59 @@ class JsGenTest extends ScalaCheckSuite {
     assert(result.contains("myRenderFn"), s"Expected render function argument, got: $result")
   }
 
+  // ==================
+  // NumericExternal Arity Consistency Tests
+  // ==================
+
+  val NumericPackage: PackageName = PackageName.parse("Bosatsu/Numeric").get
+
+  def numericGlobal(name: String): Matchless.Expr[Unit] =
+    Matchless.Global((), NumericPackage, Name(name))
+
+  test("NumericExternal random has arity 1 (takes Unit argument)") {
+    // Bosatsu declares: external def random(u: Unit) -> Double
+    // JsGen must accept 1 argument (even though JS Math.random() takes 0)
+    val unitArg = MakeStruct(0)  // Unit value
+    val expr = App(numericGlobal("random"), NonEmptyList.one(unitArg))
+    val result = JsGen.renderExpr(expr)
+    // Should call Math.random() - the Unit arg is ignored but arity must match
+    assert(result.contains("Math.random()"), s"Expected Math.random() call, got: $result")
+  }
+
+  test("NumericExternal arities match Bosatsu declarations") {
+    // This test catches the class of bugs where JsGen declares a different arity
+    // than the Bosatsu source file. All external functions must have matching arity.
+    // Uses Identifier types matching JsGen.NumericExternal.results keys.
+    val expectedArities: Map[Identifier.Bindable, Int] = Map(
+      // Symbolic operators
+      Identifier.Operator("+.") -> 2, Identifier.Operator("-.") -> 2,
+      Identifier.Operator("*.") -> 2, Identifier.Operator("/.") -> 2,
+      // Conversion
+      Name("from_Int") -> 1, Name("to_Int") -> 1,
+      Name("double_to_String") -> 1, Name("string_to_Double") -> 1,
+      // Comparison
+      Name("cmp_Double") -> 2, Name("eq_Double") -> 2,
+      // Unary
+      Name("neg_Double") -> 1, Name("abs_Double") -> 1,
+      // Trig
+      Name("sin") -> 1, Name("cos") -> 1, Name("tan") -> 1,
+      // Power/exponential
+      Name("sqrt") -> 1, Name("pow") -> 2, Name("exp") -> 1, Name("log") -> 1,
+      // Rounding
+      Name("floor") -> 1, Name("ceil") -> 1, Name("round") -> 1,
+      // Random - random takes Unit arg, so arity must be 1
+      Name("random") -> 1, Name("random_range") -> 2,
+      // Min/max
+      Name("min_Double") -> 2, Name("max_Double") -> 2
+    )
+
+    expectedArities.foreach { case (id, expectedArity) =>
+      val actual = JsGen.NumericExternal.results.get(id).map(_._2)
+      assert(actual.isDefined, s"NumericExternal missing function: ${id.asString}")
+      assertEquals(actual.get, expectedArity, s"Arity mismatch for ${id.asString}")
+    }
+  }
+
   test("CanvasExternal sequence generates tagged object with type sequence") {
     val commands = Local(bindable("myCommands"))
     val expr = App(canvasGlobal("sequence"), NonEmptyList.one(commands))

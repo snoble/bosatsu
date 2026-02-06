@@ -84,7 +84,8 @@ object TlaJson {
       "guard" -> a.guard.asJson,
       "effect" -> a.effect.asJson,
       "pcFrom" -> a.pcFrom.asJson,
-      "pcTo" -> a.pcTo.asJson
+      "pcTo" -> a.pcTo.asJson,
+      "multiInstance" -> a.multiInstance.asJson
     )
   }
 
@@ -95,7 +96,8 @@ object TlaJson {
       effect <- c.downField("effect").as[String]
       pcFrom <- c.downField("pcFrom").as[String]
       pcTo <- c.downField("pcTo").as[String]
-    } yield TlaAction(name, guard, effect, pcFrom, pcTo)
+      multiInstance <- c.downField("multiInstance").as[Option[Boolean]]
+    } yield TlaAction(name, guard, effect, pcFrom, pcTo, multiInstance.getOrElse(false))
   }
 
   // TlaSpec

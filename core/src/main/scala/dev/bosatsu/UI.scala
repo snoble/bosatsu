@@ -120,7 +120,11 @@ object UI {
         }
       })
       // write(state, value) -> Unit
-      // Note: In JVM, this is a side effect for runtime
+      // JVM implementation: mutates UIState and returns UnitValue directly (not IO-wrapped).
+      // This is by design: JVM externals are for compile-time type checking and evaluation,
+      // not browser runtime. IO semantics (tagged data structures) are only relevant in the
+      // JS runtime where _runIO() interprets them. The JsGen intrinsic generates the proper
+      // {tag: "Write", state, value} IO data structure for the browser.
       .add(packageName, "write", FfiCall.Fn2 { (state, value) =>
         state.asExternal.toAny match {
           case s: UIState[Value @unchecked] => s.value = value

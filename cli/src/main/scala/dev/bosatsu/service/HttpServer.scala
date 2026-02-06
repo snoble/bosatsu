@@ -99,10 +99,11 @@ object HttpServer {
   def serve(
     handlers: List[CompiledHandler],
     port: Int,
-    staticDir: Option[Path]
+    staticDir: Option[Path]  // TODO: Serve static files from this directory (not yet implemented)
   ): IO[Unit] = {
     val app = httpApp(handlers)
 
+    // Port.fromInt validates 0-65535 range; throws on invalid (not a silent fallback)
     val serverPort = Port.fromInt(port).getOrElse {
       throw new IllegalArgumentException(s"Invalid port: $port (must be 0-65535)")
     }

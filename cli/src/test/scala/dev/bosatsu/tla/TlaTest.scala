@@ -104,11 +104,21 @@ class TlaTest extends munit.FunSuite {
     assertEquals(decoded.map(_.checkDeadlock), Right(true))
   }
 
-  test("TlaJson - TlaAction roundtrip") {
+  test("TlaJson - TlaAction roundtrip (default multiInstance=false)") {
     val action = TlaAction("DoSomething", "x > 0", "x' = x - 1", "running", "done")
     val json = action.asJson
     val decoded = decode[TlaAction](json.noSpaces)
     assertEquals(decoded, Right(action))
+  }
+
+  test("TlaJson - TlaAction roundtrip (multiInstance=true)") {
+    // TlaAction.multiInstance must survive JSON encode/decode roundtrip.
+    // Without encoding this field, multi-instance specs lose their parameterization.
+    val action = TlaAction("Step", "TRUE", "state' = state + 1", "start", "done", multiInstance = true)
+    val json = action.asJson
+    val decoded = decode[TlaAction](json.noSpaces)
+    assertEquals(decoded, Right(action))
+    assertEquals(decoded.map(_.multiInstance), Right(true))
   }
 
   test("TlaJson - TlaSpec encode") {

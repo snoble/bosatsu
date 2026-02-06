@@ -415,8 +415,9 @@ object JsGen {
         Code.Call(Code.Ident("Math").dot("round"), List(args.head)), 1),
 
       // Random number generation
+      // Bosatsu declares: random(u: Unit) -> Double, so arity is 1 (Unit arg is ignored)
       Identifier.Name("random") -> ((_: List[Code.Expression]) =>
-        Code.Call(Code.Ident("Math").dot("random"), Nil), 0),
+        Code.Call(Code.Ident("Math").dot("random"), Nil), 1),
       Identifier.Name("random_range") -> ((args: List[Code.Expression]) =>
         // min + Math.random() * (max - min)
         args.head + (Code.Call(Code.Ident("Math").dot("random"), Nil) * (args(1) - args.head)), 2),
@@ -428,7 +429,11 @@ object JsGen {
         Code.Call(Code.Ident("Math").dot("max"), List(args.head, args(1))), 2)
     )
 
-    /** Map of constants to their values */
+    /** Map of constants to their values.
+     *  Names match the Bosatsu declarations in numeric.bosatsu:
+     *  - `pi` maps to JS `Math.PI`
+     *  - `e_const` (not `e`, to avoid shadowing common variable names) maps to JS `Math.E`
+     */
     val constants: Map[Bindable, Code.Expression] = Map(
       Identifier.Name("pi") -> Code.Ident("Math").dot("PI"),
       Identifier.Name("e_const") -> Code.Ident("Math").dot("E")

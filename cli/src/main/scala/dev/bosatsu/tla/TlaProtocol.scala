@@ -184,7 +184,7 @@ case class TlcOptions(
   workers: Int = 1,
   checkDeadlock: Boolean = true,
   depth: Option[Int] = None,
-  timeout: Option[Int] = None,  // milliseconds
+  timeout: Option[Int] = None,  // Placeholder for future use; TLC manages its own timeouts
   skipIfUnavailable: Boolean = true
 ) derives CanEqual
 
