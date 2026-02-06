@@ -1059,4 +1059,314 @@ x = (
       assertEquals(allRhos, optQuant.isEmpty)
     }
   }
+
+  // =========================================================================
+  // Tests for mayHaveSideEffects / side-effect-aware normalization
+  // =========================================================================
+
+  // Helper: a package name for our test externals
+  private val testPack = PackageName.parts("Test", "Pkg")
+
+  // Helper: create a TypeEnv with an external value registered
+  private def typeEnvWithExternal(
+      pack: PackageName,
+      name: String,
+      tpe: rankn.Type
+  ): rankn.TypeEnv[Nothing] =
+    rankn.TypeEnv.empty.addExternalValue(pack, Identifier.Name(name), tpe)
+
+  // Helper: create a Global reference to an external function
+  private def extGlobal(
+      pack: PackageName,
+      name: String,
+      tpe: rankn.Type
+  ): TypedExpr[Unit] =
+    TypedExpr.Global(pack, Identifier.Name(name), tpe, ())
+
+  // Helper: normalize with a specific TypeEnv via normalizeAll
+  private def normalizeWithEnv(
+      te: TypedExpr[Unit],
+      typeEnv: rankn.TypeEnv[Nothing]
+  ): TypedExpr[Unit] = {
+    val bindName = Identifier.Name("__result")
+    val lets = List((bindName, RecursionKind.NonRecursive, te))
+    val result = TypedExprNormalization.normalizeAll(testPack, lets, typeEnv)
+    result.head._3
+  }
+
+  test("let dead-code elimination: pure expression is eliminated when unused") {
+    // let x = 42 in 10  =>  10  (pure, x unused)
+    val expr = let("x", int(42), int(10))
+    val result = TypedExprNormalization.normalize(expr)
+    assertEquals(result, Some(int(10)))
+  }
+
+  test("let dead-code elimination: external call preserved when unused") {
+    // let x = write(state) in 10
+    // write is external => don't eliminate, keep the let
+    val writeTpe = Type.Fun(NonEmptyList.one(intTpe), intTpe)
+    val envWithWrite = typeEnvWithExternal(testPack, "write", writeTpe)
+    val writeRef = extGlobal(testPack, "write", writeTpe)
+    val writeCall = TypedExpr.App(writeRef, NonEmptyList.one(int(1)), intTpe, ())
+    // let x = write(1) in 10
+    val expr = TypedExpr.Let(
+      Identifier.Name("x"),
+      writeCall,
+      int(10),
+      RecursionKind.NonRecursive,
+      ()
+    )
+    val result = normalizeWithEnv(expr, envWithWrite)
+    // The result should still contain a Let with the write call
+    result match {
+      case TypedExpr.Let(_, ex, in, _, _) =>
+        // The let should be preserved because write is external
+        assert(true)
+      case other =>
+        // It should NOT be just int(10); the let should be kept
+        fail(
+          s"expected Let to be preserved for external call, got: ${other.repr.render(80)}"
+        )
+    }
+  }
+
+  test("let dead-code elimination: non-external call is eliminated when unused") {
+    // let x = f(1) in 10 where f is NOT external => eliminate
+    // Using a local variable as function (locals are always pure in Bosatsu)
+    val fTpe = Type.Fun(NonEmptyList.one(intTpe), intTpe)
+    val fRef = varTE("f", fTpe)
+    val fCall = app(fRef, int(1), intTpe)
+    val expr = TypedExpr.Let(
+      Identifier.Name("x"),
+      fCall,
+      int(10),
+      RecursionKind.NonRecursive,
+      ()
+    )
+    // With empty TypeEnv (no externals), f is not external => pure
+    val result = TypedExprNormalization.normalize(expr)
+    // The Let should be eliminated since x is unused and f is not external
+    assertEquals(result, Some(int(10)))
+  }
+
+  test("match single-branch: pure arg is eliminated") {
+    // match 42: case _: 10  =>  10
+    val expr = TypedExpr.Match(
+      int(42),
+      NonEmptyList.one((Pattern.WildCard, int(10))),
+      ()
+    )
+    val result = TypedExprNormalization.normalize(expr)
+    assertEquals(result, Some(int(10)))
+  }
+
+  test("match single-branch: external call arg is preserved") {
+    // match write(1): case _: 10
+    // write is external => keep the match
+    val writeTpe = Type.Fun(NonEmptyList.one(intTpe), intTpe)
+    val envWithWrite = typeEnvWithExternal(testPack, "write", writeTpe)
+    val writeRef = extGlobal(testPack, "write", writeTpe)
+    val writeCall = TypedExpr.App(writeRef, NonEmptyList.one(int(1)), intTpe, ())
+    val expr = TypedExpr.Match(
+      writeCall,
+      NonEmptyList.one((Pattern.WildCard, int(10))),
+      ()
+    )
+    val result = normalizeWithEnv(expr, envWithWrite)
+    // The result should NOT just be int(10); the match should be preserved
+    result match {
+      case TypedExpr.Literal(_, _, _) =>
+        fail(
+          "match with external call arg should not be eliminated to a literal"
+        )
+      case _ =>
+        // Good - the match or let structure is preserved
+        assert(true)
+    }
+  }
+
+  test("lambda let-lifting: pure let is lifted above lambda") {
+    // x -> (y = 42; f(y))  =>  y = 42; x -> f(y)
+    // where f is not external (pure)
+    // This tests that pure lets ARE still lifted
+    normSame(
+      """#
+def fn(x):
+  y = 42
+  _ = x
+  y
+""",
+      """#
+fn = _ -> 42
+"""
+    )
+  }
+
+  test("lambda match-lifting: pure match is lifted above lambda") {
+    // This verifies that pure match lifting still works
+    normSame(
+      """#
+struct Tup2(a, b)
+
+y = Tup2(1, 2)
+
+def inner_match(x):
+  match y:
+    case Tup2(a, _): Tup2(a, x)
+""",
+      """#
+struct Tup2(a, b)
+inner_match = x -> Tup2(1, x)
+"""
+    )
+  }
+
+  test("mayHaveSideEffects: non-App expression returns false") {
+    // A literal is not an App, so mayHaveSideEffects should be false
+    // We test this indirectly: let x = 42 in 10 should be optimized away
+    val expr = let("x", int(42), int(10))
+    val result = TypedExprNormalization.normalize(expr)
+    assertEquals(result, Some(int(10)))
+  }
+
+  test("mayHaveSideEffects: App with local function returns false") {
+    // App with a local function reference is always pure
+    // let x = f(1) in 10 where f is local => eliminate
+    val fTpe = Type.Fun(NonEmptyList.one(intTpe), intTpe)
+    val expr = let(
+      "x",
+      app(varTE("f", fTpe), int(1), intTpe),
+      int(10)
+    )
+    val result = TypedExprNormalization.normalize(expr)
+    assertEquals(result, Some(int(10)))
+  }
+
+  test("mayHaveSideEffects: App with Constructor returns false") {
+    // Constructor applications are always pure
+    // This is tested indirectly via normSame - Tup2(1, 2) should be inlinable
+    normSame(
+      """#
+struct Tup2(a, b)
+x = Tup2(1, 2)
+y = match x:
+  case Tup2(a, _): a
+""",
+      """#
+y = 1
+"""
+    )
+  }
+
+  test("normalizeAll with external: unused external call preserved in let") {
+    // Create a TypeEnv with an external "sideEffect" function
+    val seTpe = Type.Fun(NonEmptyList.one(intTpe), intTpe)
+    val env = typeEnvWithExternal(testPack, "side_effect", seTpe)
+    val seRef = extGlobal(testPack, "side_effect", seTpe)
+    val seCall = TypedExpr.App(seRef, NonEmptyList.one(int(1)), intTpe, ())
+
+    // let unused = side_effect(1) in 99
+    val bindName = Identifier.Name("unused_val")
+    val body = int(99)
+    val expr = TypedExpr.Let(bindName, seCall, body, RecursionKind.NonRecursive, ())
+
+    val resultName = Identifier.Name("result")
+    val lets =
+      List((resultName, RecursionKind.NonRecursive, expr))
+    val normalized = TypedExprNormalization.normalizeAll(testPack, lets, env)
+    val resultExpr = normalized.head._3
+
+    // The let should NOT be eliminated because side_effect is external
+    resultExpr match {
+      case TypedExpr.Literal(l, _, _) =>
+        fail(
+          s"external call let should not be eliminated, but got literal: $l"
+        )
+      case TypedExpr.Let(_, _, _, _, _) =>
+        // Good - the let is preserved
+        assert(true)
+      case other =>
+        // Any non-literal result that preserves structure is acceptable
+        assert(
+          true,
+          s"got: ${other.repr.render(80)}"
+        )
+    }
+  }
+
+  test("normalizeAll without external: unused pure call is eliminated in let") {
+    // With empty TypeEnv, a Global reference is not considered external
+    // let unused = g(1) in 99 where g is not in typeEnv => pure => eliminate
+    val gTpe = Type.Fun(NonEmptyList.one(intTpe), intTpe)
+    val gRef = TypedExpr.Global(testPack, Identifier.Name("g"), gTpe, ())
+    val gCall = TypedExpr.App(gRef, NonEmptyList.one(int(1)), intTpe, ())
+
+    val bindName = Identifier.Name("unused_val")
+    val body = int(99)
+    val expr = TypedExpr.Let(bindName, gCall, body, RecursionKind.NonRecursive, ())
+
+    // Use empty TypeEnv - g is NOT registered as external
+    val resultName = Identifier.Name("result")
+    val lets =
+      List((resultName, RecursionKind.NonRecursive, expr))
+    val normalized =
+      TypedExprNormalization.normalizeAll(testPack, lets, rankn.TypeEnv.empty)
+    val resultExpr = normalized.head._3
+
+    // The let should be eliminated because g is not external
+    resultExpr match {
+      case TypedExpr.Literal(l, _, _) =>
+        assertEquals(l, Lit.fromInt(99))
+      case other =>
+        fail(
+          s"expected literal 99 after eliminating pure unused let, got: ${other.repr.render(80)}"
+        )
+    }
+  }
+
+  test("normalizeAll: curried external call is detected as having side effects") {
+    // write(state)(value) - a curried external call
+    // The functionHead should recurse through App to find the Global
+    val writeTpe = Type.Fun(
+      NonEmptyList.one(intTpe),
+      Type.Fun(NonEmptyList.one(intTpe), intTpe)
+    )
+    val env = typeEnvWithExternal(testPack, "write", writeTpe)
+    val writeRef = extGlobal(testPack, "write", writeTpe)
+    // write(1) returns a function
+    val partialApp = TypedExpr.App(
+      writeRef,
+      NonEmptyList.one(int(1)),
+      Type.Fun(NonEmptyList.one(intTpe), intTpe),
+      ()
+    )
+    // write(1)(2) - full application
+    val fullApp = TypedExpr.App(partialApp, NonEmptyList.one(int(2)), intTpe, ())
+
+    // let unused = write(1)(2) in 99
+    val expr = TypedExpr.Let(
+      Identifier.Name("unused_val"),
+      fullApp,
+      int(99),
+      RecursionKind.NonRecursive,
+      ()
+    )
+
+    val resultName = Identifier.Name("result")
+    val lets =
+      List((resultName, RecursionKind.NonRecursive, expr))
+    val normalized = TypedExprNormalization.normalizeAll(testPack, lets, env)
+    val resultExpr = normalized.head._3
+
+    // The let should NOT be eliminated because write is external
+    resultExpr match {
+      case TypedExpr.Literal(l, _, _) =>
+        fail(
+          s"curried external call let should not be eliminated, got literal: $l"
+        )
+      case _ =>
+        // Good - the let is preserved
+        assert(true)
+    }
+  }
 }

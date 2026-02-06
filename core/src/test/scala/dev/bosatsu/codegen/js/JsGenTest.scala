@@ -570,4 +570,242 @@ class JsGenTest extends ScalaCheckSuite {
     val writeResult = JsGen.renderExpr(writeExpr)
     assert(!writeResult.contains("() =>"), s"write should not generate thunk, got: $writeResult")
   }
+
+  // ==================
+  // IO Intrinsic Tests (additional)
+  // ==================
+
+  test("IOExternal capture generates Capture tagged object") {
+    val name = Literal(Lit.Str("myCapture"))
+    val value = Literal(Lit.Integer(100))
+    val expr = App(ioGlobal("capture"), NonEmptyList.of(name, value))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"Capture\""), s"Expected Capture tag, got: $result")
+    assert(result.contains("name"), s"Expected 'name' key, got: $result")
+    assert(result.contains("value"), s"Expected 'value' key, got: $result")
+  }
+
+  test("IOExternal captureFormula generates CaptureFormula tagged object") {
+    val name = Literal(Lit.Str("myFormula"))
+    val formula = Literal(Lit.Str("x + 1"))
+    val value = Literal(Lit.Integer(42))
+    val expr = App(ioGlobal("captureFormula"), NonEmptyList.of(name, formula, value))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"CaptureFormula\""), s"Expected CaptureFormula tag, got: $result")
+    assert(result.contains("name"), s"Expected 'name' key, got: $result")
+    assert(result.contains("formula"), s"Expected 'formula' key, got: $result")
+    assert(result.contains("value"), s"Expected 'value' key, got: $result")
+  }
+
+  // ==================
+  // UI Intrinsic Tests (additional)
+  // ==================
+
+  test("UIExternal list_state generates _ui_create_list_state call") {
+    val initial = Local(bindable("myInitial"))
+    val expr = App(uiGlobal("list_state"), NonEmptyList.one(initial))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("_ui_create_list_state"), s"Expected _ui_create_list_state call, got: $result")
+    assert(result.contains("myInitial"), s"Expected initial value argument, got: $result")
+  }
+
+  test("UIExternal list_read generates _ui_list_read call") {
+    val listState = Local(bindable("myListState"))
+    val expr = App(uiGlobal("list_read"), NonEmptyList.one(listState))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("_ui_list_read"), s"Expected _ui_list_read call, got: $result")
+    assert(result.contains("myListState"), s"Expected list state argument, got: $result")
+  }
+
+  test("UIExternal list_append generates _ui_list_append call") {
+    val listState = Local(bindable("myListState"))
+    val item = Literal(Lit.Integer(7))
+    val expr = App(uiGlobal("list_append"), NonEmptyList.of(listState, item))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("_ui_list_append"), s"Expected _ui_list_append call, got: $result")
+    assert(result.contains("myListState"), s"Expected list state argument, got: $result")
+    assert(result.contains("7"), s"Expected item argument, got: $result")
+  }
+
+  test("UIExternal on_keydown generates handler registration with keydown") {
+    val handler = Local(bindable("myHandler"))
+    val expr = App(uiGlobal("on_keydown"), NonEmptyList.one(handler))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("data-onkeydown"), s"Expected data-onkeydown attribute, got: $result")
+    assert(result.contains("_ui_register_handler"), s"Expected handler registration call, got: $result")
+    assert(result.contains("\"keydown\""), s"Expected keydown event type, got: $result")
+  }
+
+  test("UIExternal on_dragstart generates handler registration with dragstart") {
+    val handler = Local(bindable("myHandler"))
+    val expr = App(uiGlobal("on_dragstart"), NonEmptyList.one(handler))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("data-ondragstart"), s"Expected data-ondragstart attribute, got: $result")
+    assert(result.contains("_ui_register_handler"), s"Expected handler registration call, got: $result")
+    assert(result.contains("\"dragstart\""), s"Expected dragstart event type, got: $result")
+  }
+
+  // ==================
+  // Canvas Intrinsic Tests
+  // ==================
+
+  val CanvasPackage: PackageName = PackageName.parse("Bosatsu/Canvas").get
+
+  def canvasGlobal(name: String): Matchless.Expr[Unit] =
+    Matchless.Global((), CanvasPackage, Name(name))
+
+  test("CanvasExternal circle generates tagged object with type circle") {
+    val expr = App(canvasGlobal("circle"), NonEmptyList.of(
+      Literal(Lit.Integer(10)),
+      Literal(Lit.Integer(20)),
+      Literal(Lit.Integer(5))
+    ))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"circle\""), s"Expected type 'circle', got: $result")
+    assert(result.contains("type"), s"Expected 'type' key, got: $result")
+    assert(result.contains("x"), s"Expected 'x' key, got: $result")
+    assert(result.contains("y"), s"Expected 'y' key, got: $result")
+    assert(result.contains("r"), s"Expected 'r' key, got: $result")
+    assert(result.contains("10"), s"Expected x value 10, got: $result")
+    assert(result.contains("20"), s"Expected y value 20, got: $result")
+    assert(result.contains("5"), s"Expected r value 5, got: $result")
+  }
+
+  test("CanvasExternal rect generates tagged object with type rect") {
+    val expr = App(canvasGlobal("rect"), NonEmptyList.of(
+      Literal(Lit.Integer(0)),
+      Literal(Lit.Integer(0)),
+      Literal(Lit.Integer(100)),
+      Literal(Lit.Integer(50))
+    ))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"rect\""), s"Expected type 'rect', got: $result")
+    assert(result.contains("type"), s"Expected 'type' key, got: $result")
+    assert(result.contains("x"), s"Expected 'x' key, got: $result")
+    assert(result.contains("y"), s"Expected 'y' key, got: $result")
+    assert(result.contains("w"), s"Expected 'w' key, got: $result")
+    assert(result.contains("h"), s"Expected 'h' key, got: $result")
+    assert(result.contains("100"), s"Expected w value 100, got: $result")
+    assert(result.contains("50"), s"Expected h value 50, got: $result")
+  }
+
+  test("CanvasExternal line generates tagged object with type line") {
+    val expr = App(canvasGlobal("line"), NonEmptyList.of(
+      Literal(Lit.Integer(0)),
+      Literal(Lit.Integer(0)),
+      Literal(Lit.Integer(100)),
+      Literal(Lit.Integer(100))
+    ))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"line\""), s"Expected type 'line', got: $result")
+    assert(result.contains("type"), s"Expected 'type' key, got: $result")
+    assert(result.contains("x1"), s"Expected 'x1' key, got: $result")
+    assert(result.contains("y1"), s"Expected 'y1' key, got: $result")
+    assert(result.contains("x2"), s"Expected 'x2' key, got: $result")
+    assert(result.contains("y2"), s"Expected 'y2' key, got: $result")
+  }
+
+  test("CanvasExternal fill generates tagged object with type fill") {
+    val color = Literal(Lit.Str("red"))
+    val expr = App(canvasGlobal("fill"), NonEmptyList.one(color))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"fill\""), s"Expected type 'fill', got: $result")
+    assert(result.contains("type"), s"Expected 'type' key, got: $result")
+    assert(result.contains("color"), s"Expected 'color' key, got: $result")
+    assert(result.contains("_bosatsu_to_js_string"), s"Expected string conversion for color, got: $result")
+  }
+
+  test("CanvasExternal stroke generates tagged object with type stroke") {
+    val color = Literal(Lit.Str("blue"))
+    val expr = App(canvasGlobal("stroke"), NonEmptyList.one(color))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"stroke\""), s"Expected type 'stroke', got: $result")
+    assert(result.contains("type"), s"Expected 'type' key, got: $result")
+    assert(result.contains("color"), s"Expected 'color' key, got: $result")
+    assert(result.contains("_bosatsu_to_js_string"), s"Expected string conversion for color, got: $result")
+  }
+
+  test("CanvasExternal clear generates tagged object with type clear") {
+    val color = Literal(Lit.Str("white"))
+    val expr = App(canvasGlobal("clear"), NonEmptyList.one(color))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"clear\""), s"Expected type 'clear', got: $result")
+    assert(result.contains("type"), s"Expected 'type' key, got: $result")
+    assert(result.contains("color"), s"Expected 'color' key, got: $result")
+    assert(result.contains("_bosatsu_to_js_string"), s"Expected string conversion for color, got: $result")
+  }
+
+  test("CanvasExternal save generates tagged object with type save") {
+    val unit = MakeStruct(0)
+    val expr = App(canvasGlobal("save"), NonEmptyList.one(unit))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"save\""), s"Expected type 'save', got: $result")
+    assert(result.contains("type"), s"Expected 'type' key, got: $result")
+  }
+
+  test("CanvasExternal restore generates tagged object with type restore") {
+    val unit = MakeStruct(0)
+    val expr = App(canvasGlobal("restore"), NonEmptyList.one(unit))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"restore\""), s"Expected type 'restore', got: $result")
+    assert(result.contains("type"), s"Expected 'type' key, got: $result")
+  }
+
+  test("CanvasExternal translate generates tagged object with type translate") {
+    val expr = App(canvasGlobal("translate"), NonEmptyList.of(
+      Literal(Lit.Integer(50)),
+      Literal(Lit.Integer(75))
+    ))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"translate\""), s"Expected type 'translate', got: $result")
+    assert(result.contains("type"), s"Expected 'type' key, got: $result")
+    assert(result.contains("x"), s"Expected 'x' key, got: $result")
+    assert(result.contains("y"), s"Expected 'y' key, got: $result")
+    assert(result.contains("50"), s"Expected x value 50, got: $result")
+    assert(result.contains("75"), s"Expected y value 75, got: $result")
+  }
+
+  test("CanvasExternal rotate generates tagged object with type rotate") {
+    val expr = App(canvasGlobal("rotate"), NonEmptyList.one(Literal(Lit.Integer(45))))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"rotate\""), s"Expected type 'rotate', got: $result")
+    assert(result.contains("type"), s"Expected 'type' key, got: $result")
+    assert(result.contains("angle"), s"Expected 'angle' key, got: $result")
+    assert(result.contains("45"), s"Expected angle value 45, got: $result")
+  }
+
+  test("CanvasExternal scale generates tagged object with type scale") {
+    val expr = App(canvasGlobal("scale"), NonEmptyList.of(
+      Literal(Lit.Integer(2)),
+      Literal(Lit.Integer(3))
+    ))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"scale\""), s"Expected type 'scale', got: $result")
+    assert(result.contains("type"), s"Expected 'type' key, got: $result")
+    assert(result.contains("sx"), s"Expected 'sx' key, got: $result")
+    assert(result.contains("sy"), s"Expected 'sy' key, got: $result")
+    assert(result.contains("2"), s"Expected sx value 2, got: $result")
+    assert(result.contains("3"), s"Expected sy value 3, got: $result")
+  }
+
+  test("CanvasExternal canvas_render generates _ui_register_canvas_render call") {
+    val state = Local(bindable("myState"))
+    val renderFn = Local(bindable("myRenderFn"))
+    val expr = App(canvasGlobal("canvas_render"), NonEmptyList.of(state, renderFn))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("data-canvas-render"), s"Expected data-canvas-render attribute, got: $result")
+    assert(result.contains("_ui_register_canvas_render"), s"Expected _ui_register_canvas_render call, got: $result")
+    assert(result.contains("myState"), s"Expected state argument, got: $result")
+    assert(result.contains("myRenderFn"), s"Expected render function argument, got: $result")
+  }
+
+  test("CanvasExternal sequence generates tagged object with type sequence") {
+    val commands = Local(bindable("myCommands"))
+    val expr = App(canvasGlobal("sequence"), NonEmptyList.one(commands))
+    val result = JsGen.renderExpr(expr)
+    assert(result.contains("\"sequence\""), s"Expected type 'sequence', got: $result")
+    assert(result.contains("type"), s"Expected 'type' key, got: $result")
+    assert(result.contains("commands"), s"Expected 'commands' key, got: $result")
+    assert(result.contains("_bosatsu_list_to_array"), s"Expected list-to-array conversion, got: $result")
+  }
 }

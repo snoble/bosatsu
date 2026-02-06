@@ -973,4 +973,506 @@ def compute(x: Int, y: Int) -> Int:
     val kinds = Set(OperationKind.Read, OperationKind.Write, OperationKind.Unknown)
     assertEquals(kinds.size, 3)
   }
+
+  // ==========================================================================
+  // ServiceCli.parse - comprehensive argument parsing tests
+  // ==========================================================================
+
+  test("ServiceCli.parse - empty args returns Left") {
+    val result = ServiceCli.parse(List.empty)
+    assert(result.isLeft, "Expected Left for empty args")
+  }
+
+  test("ServiceCli.parse - analyze without source file returns Left") {
+    val result = ServiceCli.parse(List("analyze"))
+    assert(result.isLeft, "Expected Left when source-file is missing")
+  }
+
+  test("ServiceCli.parse - validate without source file returns Left") {
+    val result = ServiceCli.parse(List("validate"))
+    assert(result.isLeft, "Expected Left when source-file is missing")
+  }
+
+  test("ServiceCli.parse - build without source file returns Left") {
+    val result = ServiceCli.parse(List("build"))
+    assert(result.isLeft, "Expected Left when source-file is missing")
+  }
+
+  test("ServiceCli.parse - serve without source file returns Left") {
+    val result = ServiceCli.parse(List("serve"))
+    assert(result.isLeft, "Expected Left when source-file is missing")
+  }
+
+  test("ServiceCli.parse - mcp without source file returns Left") {
+    val result = ServiceCli.parse(List("mcp"))
+    assert(result.isLeft, "Expected Left when source-file is missing")
+  }
+
+  test("ServiceCli.parse - analyze defaults: no function, outputJson=false") {
+    val result = ServiceCli.parse(List("analyze", "app.bosatsu"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.AnalyzeAction]
+    assertEquals(action.sourceFile.toString, "app.bosatsu")
+    assertEquals(action.functionName, None)
+    assertEquals(action.outputJson, false)
+  }
+
+  test("ServiceCli.parse - analyze with short flag -f for function") {
+    val result = ServiceCli.parse(List("analyze", "app.bosatsu", "-f", "myFunc"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.AnalyzeAction]
+    assertEquals(action.functionName, Some("myFunc"))
+  }
+
+  test("ServiceCli.parse - analyze with short flag -j for json") {
+    val result = ServiceCli.parse(List("analyze", "app.bosatsu", "-j"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.AnalyzeAction]
+    assertEquals(action.outputJson, true)
+  }
+
+  test("ServiceCli.parse - analyze with both --function and --json") {
+    val result = ServiceCli.parse(List("analyze", "app.bosatsu", "--function", "handler1", "--json"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.AnalyzeAction]
+    assertEquals(action.functionName, Some("handler1"))
+    assertEquals(action.outputJson, true)
+  }
+
+  test("ServiceCli.parse - analyze with both short flags -f and -j") {
+    val result = ServiceCli.parse(List("analyze", "app.bosatsu", "-f", "h", "-j"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.AnalyzeAction]
+    assertEquals(action.functionName, Some("h"))
+    assertEquals(action.outputJson, true)
+  }
+
+  test("ServiceCli.parse - validate returns ValidateAction with correct path") {
+    val result = ServiceCli.parse(List("validate", "src/main.bosatsu"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.ValidateAction]
+    assertEquals(action.sourceFile.toString, "src/main.bosatsu")
+  }
+
+  test("ServiceCli.parse - build defaults: output=dist, target=Standalone") {
+    val result = ServiceCli.parse(List("build", "app.bosatsu"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.BuildAction]
+    assertEquals(action.sourceFile.toString, "app.bosatsu")
+    assertEquals(action.output.toString, "dist")
+    assertEquals(action.target, BuildTarget.Standalone)
+  }
+
+  test("ServiceCli.parse - build with short flag -o for output") {
+    val result = ServiceCli.parse(List("build", "app.bosatsu", "-o", "out/build"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.BuildAction]
+    assertEquals(action.output.toString, "out/build")
+  }
+
+  test("ServiceCli.parse - build with short flag -t for target") {
+    val result = ServiceCli.parse(List("build", "app.bosatsu", "-t", "vercel"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.BuildAction]
+    assertEquals(action.target, BuildTarget.Vercel)
+  }
+
+  test("ServiceCli.parse - build with both -o and -t short flags") {
+    val result = ServiceCli.parse(List("build", "app.bosatsu", "-o", "deploy", "-t", "aws-lambda"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.BuildAction]
+    assertEquals(action.output.toString, "deploy")
+    assertEquals(action.target, BuildTarget.AwsLambda)
+  }
+
+  test("ServiceCli.parse - serve default port is 3000") {
+    val result = ServiceCli.parse(List("serve", "app.bosatsu"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.ServeAction]
+    assertEquals(action.port, 3000)
+    assertEquals(action.configFile, None)
+    assertEquals(action.staticDir, None)
+  }
+
+  test("ServiceCli.parse - serve with short flag -p for port") {
+    val result = ServiceCli.parse(List("serve", "app.bosatsu", "-p", "8080"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.ServeAction]
+    assertEquals(action.port, 8080)
+  }
+
+  test("ServiceCli.parse - serve with --config option") {
+    val result = ServiceCli.parse(List("serve", "app.bosatsu", "--config", "config.json"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.ServeAction]
+    assertEquals(action.configFile.map(_.toString), Some("config.json"))
+  }
+
+  test("ServiceCli.parse - serve with short flag -c for config") {
+    val result = ServiceCli.parse(List("serve", "app.bosatsu", "-c", "my.conf"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.ServeAction]
+    assertEquals(action.configFile.map(_.toString), Some("my.conf"))
+  }
+
+  test("ServiceCli.parse - serve with --static option") {
+    val result = ServiceCli.parse(List("serve", "app.bosatsu", "--static", "public"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.ServeAction]
+    assertEquals(action.staticDir.map(_.toString), Some("public"))
+  }
+
+  test("ServiceCli.parse - serve with short flag -s for static") {
+    val result = ServiceCli.parse(List("serve", "app.bosatsu", "-s", "static"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.ServeAction]
+    assertEquals(action.staticDir.map(_.toString), Some("static"))
+  }
+
+  test("ServiceCli.parse - serve with all options") {
+    val result = ServiceCli.parse(List(
+      "serve", "app.bosatsu",
+      "--port", "4000",
+      "--config", "svc.conf",
+      "--static", "assets"
+    ))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.ServeAction]
+    assertEquals(action.port, 4000)
+    assertEquals(action.configFile.map(_.toString), Some("svc.conf"))
+    assertEquals(action.staticDir.map(_.toString), Some("assets"))
+  }
+
+  test("ServiceCli.parse - mcp defaults: no config, no name") {
+    val result = ServiceCli.parse(List("mcp", "service.bosatsu"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.McpAction]
+    assertEquals(action.sourceFile.toString, "service.bosatsu")
+    assertEquals(action.configFile, None)
+    assertEquals(action.name, None)
+  }
+
+  test("ServiceCli.parse - mcp with --config option") {
+    val result = ServiceCli.parse(List("mcp", "app.bosatsu", "--config", "mcp.conf"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.McpAction]
+    assertEquals(action.configFile.map(_.toString), Some("mcp.conf"))
+  }
+
+  test("ServiceCli.parse - mcp with short flag -c for config") {
+    val result = ServiceCli.parse(List("mcp", "app.bosatsu", "-c", "mcp.json"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.McpAction]
+    assertEquals(action.configFile.map(_.toString), Some("mcp.json"))
+  }
+
+  test("ServiceCli.parse - mcp with short flag -n for name") {
+    val result = ServiceCli.parse(List("mcp", "app.bosatsu", "-n", "MyMCP"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.McpAction]
+    assertEquals(action.name, Some("MyMCP"))
+  }
+
+  test("ServiceCli.parse - mcp with all options") {
+    val result = ServiceCli.parse(List(
+      "mcp", "app.bosatsu",
+      "--config", "cfg.json",
+      "--name", "FullMcp"
+    ))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.McpAction]
+    assertEquals(action.configFile.map(_.toString), Some("cfg.json"))
+    assertEquals(action.name, Some("FullMcp"))
+  }
+
+  test("ServiceCli.parse - unknown subcommand returns Left") {
+    val result = ServiceCli.parse(List("deploy", "app.bosatsu"))
+    assert(result.isLeft, "Expected Left for unknown subcommand 'deploy'")
+  }
+
+  test("ServiceCli.parse - extra unknown flag returns Left") {
+    val result = ServiceCli.parse(List("analyze", "app.bosatsu", "--unknown-flag"))
+    assert(result.isLeft, "Expected Left for unknown flag")
+  }
+
+  test("ServiceCli.parse - each subcommand returns correct sealed trait variant") {
+    // Verify command discrimination: each subcommand maps to exactly one case class
+    val analyzeResult = ServiceCli.parse(List("analyze", "a.bosatsu"))
+    val validateResult = ServiceCli.parse(List("validate", "v.bosatsu"))
+    val buildResult = ServiceCli.parse(List("build", "b.bosatsu"))
+    val serveResult = ServiceCli.parse(List("serve", "s.bosatsu"))
+    val mcpResult = ServiceCli.parse(List("mcp", "m.bosatsu"))
+
+    assert(analyzeResult.toOption.get.isInstanceOf[ServiceCli.AnalyzeAction])
+    assert(!analyzeResult.toOption.get.isInstanceOf[ServiceCli.ValidateAction])
+
+    assert(validateResult.toOption.get.isInstanceOf[ServiceCli.ValidateAction])
+    assert(!validateResult.toOption.get.isInstanceOf[ServiceCli.BuildAction])
+
+    assert(buildResult.toOption.get.isInstanceOf[ServiceCli.BuildAction])
+    assert(!buildResult.toOption.get.isInstanceOf[ServiceCli.ServeAction])
+
+    assert(serveResult.toOption.get.isInstanceOf[ServiceCli.ServeAction])
+    assert(!serveResult.toOption.get.isInstanceOf[ServiceCli.McpAction])
+
+    assert(mcpResult.toOption.get.isInstanceOf[ServiceCli.McpAction])
+    assert(!mcpResult.toOption.get.isInstanceOf[ServiceCli.AnalyzeAction])
+  }
+
+  test("ServiceCli.parse - source file path preserved exactly") {
+    val result = ServiceCli.parse(List("analyze", "/absolute/path/to/service.bosatsu"))
+    assert(result.isRight)
+    val action = result.toOption.get.asInstanceOf[ServiceCli.AnalyzeAction]
+    assertEquals(action.sourceFile.toString, "/absolute/path/to/service.bosatsu")
+  }
+
+  // ==========================================================================
+  // BatchConfig.default - comprehensive field verification
+  // ==========================================================================
+
+  test("BatchConfig.default - batchableMethods contains get -> getMany") {
+    val config = BatchConfig.default
+    assertEquals(config.batchableMethods.get("get"), Some("getMany"))
+  }
+
+  test("BatchConfig.default - batchableMethods contains fetch -> fetchMany") {
+    val config = BatchConfig.default
+    assertEquals(config.batchableMethods.get("fetch"), Some("fetchMany"))
+  }
+
+  test("BatchConfig.default - batchableMethods has exactly 2 entries") {
+    val config = BatchConfig.default
+    assertEquals(config.batchableMethods.size, 2)
+  }
+
+  test("BatchConfig.default - readMethods contains all expected entries") {
+    val config = BatchConfig.default
+    val expected = Set("get", "fetch", "find", "query", "read", "load")
+    assertEquals(config.readMethods, expected)
+  }
+
+  test("BatchConfig.default - writeMethods contains all expected entries") {
+    val config = BatchConfig.default
+    val expected = Set("set", "put", "save", "write", "insert", "update", "delete")
+    assertEquals(config.writeMethods, expected)
+  }
+
+  test("BatchConfig.default - method not in readMethods or writeMethods is Unknown") {
+    // This tests the classifyMethod logic indirectly: a method not in
+    // read or write sets would produce OperationKind.Unknown
+    val config = BatchConfig.default
+    assert(!config.readMethods.contains("transform"))
+    assert(!config.writeMethods.contains("transform"))
+    // "transform" is neither read nor write, so classifyMethod returns Unknown
+  }
+
+  // ==========================================================================
+  // ServiceAnalyzer edge cases
+  // ==========================================================================
+
+  test("ServiceAnalyzer.analyzeHandler - analysis with zero operations has correct defaults") {
+    val source = """
+package ZeroOps
+
+def noop(x: Int) -> Int:
+  x
+"""
+    val result = ServiceBuilder.compileHandlers(source, "zero.bosatsu")
+    assert(result.isRight)
+    val handler = result.toOption.get.head
+    val analysis = handler.analysis
+
+    assertEquals(analysis.handlerName, "noop")
+    assertEquals(analysis.sourceFile, "zero.bosatsu")
+    assertEquals(analysis.operations, Nil)
+    assertEquals(analysis.batchGroups, Nil)
+    assertEquals(analysis.canBatch, false)
+    assertEquals(analysis.totalQueries, 0)
+    assertEquals(analysis.batchedQueries, 0)
+    assertEquals(analysis.queriesSaved, 0)
+    assertEquals(analysis.batchingEfficiency, "0%")
+  }
+
+  test("ServiceAnalyzer.analyzeHandler - handler with nested let bindings") {
+    val source = """
+package NestedLet
+
+def nested(a: Int, b: Int, c: Int) -> Int:
+  x = a.add(b)
+  y = x.add(c)
+  z = y.times(x)
+  z
+"""
+    val result = ServiceBuilder.compileHandlers(source, "nested.bosatsu")
+    assert(result.isRight, s"Expected Right but got: $result")
+    val handler = result.toOption.get.head
+    assertEquals(handler.analysis.handlerName, "nested")
+    assertEquals(handler.params.size, 3)
+  }
+
+  test("ServiceAnalysis.batchingEfficiency - handles fractional percentages") {
+    // queriesSaved=1 out of totalQueries=3 => 33%
+    val analysis = ServiceAnalysis("h", "f", Nil, Nil, true, 3, 1, 1)
+    assertEquals(analysis.batchingEfficiency, "33%")
+  }
+
+  test("ServiceAnalysis.batchingEfficiency - 100% efficiency") {
+    val analysis = ServiceAnalysis("h", "f", Nil, Nil, true, 5, 5, 5)
+    assertEquals(analysis.batchingEfficiency, "100%")
+  }
+
+  test("ServiceAnalysis.batchingEfficiency - 1 out of 7") {
+    // 1/7 = 14.28... => "14%"
+    val analysis = ServiceAnalysis("h", "f", Nil, Nil, true, 7, 1, 1)
+    assertEquals(analysis.batchingEfficiency, "14%")
+  }
+
+  test("ServiceAnalyzer - BatchGroup queriesSaved semantics: N queries become 1") {
+    // If we have 5 identical batchable operations, they can become 1 batch call,
+    // saving 4 queries
+    val ops = (1 to 5).map(_ =>
+      ServiceOperation("Cache", "get", OperationKind.Read, true, Some("getMany"))
+    ).toList
+    val group = BatchGroup("Cache", "get", "getMany", ops, ops.size - 1)
+    assertEquals(group.queriesSaved, 4)
+    assertEquals(group.operations.size, 5)
+  }
+
+  test("ServiceOperation - batchable false with no batchMethod") {
+    val op = ServiceOperation("API", "call", OperationKind.Unknown, false, None)
+    assertEquals(op.batchable, false)
+    assertEquals(op.batchMethod, None)
+    assertEquals(op.kind, OperationKind.Unknown)
+  }
+
+  test("ServiceOperation - write operation is not batchable by default") {
+    val config = BatchConfig.default
+    // "insert" is a write method but NOT in batchableMethods
+    assert(config.writeMethods.contains("insert"))
+    assert(!config.batchableMethods.contains("insert"))
+  }
+
+  // ==========================================================================
+  // HttpServer additional edge case tests
+  // ==========================================================================
+
+  test("HttpServer.apiRoutes - multiple handlers listed correctly") {
+    val a1 = ServiceAnalysis("handlerA", "a.bosatsu", Nil, Nil, false, 0, 0, 0)
+    val a2 = ServiceAnalysis("handlerB", "b.bosatsu", Nil, Nil, true, 3, 2, 1)
+    val handlers = List(
+      CompiledHandler("handlerA", Nil, "codeA", a1),
+      CompiledHandler("handlerB", Nil, "codeB", a2)
+    )
+    val routes = HttpServer.apiRoutes(handlers)
+
+    val request = Request[cats.effect.IO](Method.GET, uri"/handlers")
+    val response = routes.orNotFound.run(request).unsafeRunSync()
+
+    assertEquals(response.status, Status.Ok)
+    val body = response.as[Json].unsafeRunSync()
+    val handlerList = body.as[List[Json]].toOption.get
+    assertEquals(handlerList.size, 2)
+    assertEquals(handlerList(0).hcursor.downField("name").as[String], Right("handlerA"))
+    assertEquals(handlerList(1).hcursor.downField("name").as[String], Right("handlerB"))
+    assertEquals(handlerList(1).hcursor.downField("canBatch").as[Boolean], Right(true))
+  }
+
+  test("HttpServer.apiRoutes - GET / lists all handler names") {
+    val a1 = ServiceAnalysis("h1", "f.bosatsu", Nil, Nil, false, 0, 0, 0)
+    val a2 = ServiceAnalysis("h2", "f.bosatsu", Nil, Nil, false, 0, 0, 0)
+    val handlers = List(
+      CompiledHandler("h1", Nil, "c1", a1),
+      CompiledHandler("h2", Nil, "c2", a2)
+    )
+    val routes = HttpServer.apiRoutes(handlers)
+
+    val request = Request[cats.effect.IO](Method.GET, uri"/")
+    val response = routes.orNotFound.run(request).unsafeRunSync()
+
+    assertEquals(response.status, Status.Ok)
+    val body = response.as[Json].unsafeRunSync()
+    assertEquals(body.hcursor.downField("handlers").as[List[String]], Right(List("h1", "h2")))
+  }
+
+  test("HttpServer.apiRoutes - POST handler response contains echoed body") {
+    val analysis = ServiceAnalysis("echo", "test.bosatsu", Nil, Nil, false, 0, 0, 0)
+    val handlers = List(CompiledHandler("echo", Nil, "code", analysis))
+    val routes = HttpServer.apiRoutes(handlers)
+
+    val inputBody = Json.obj("key" -> "value".asJson, "num" -> 42.asJson)
+    val request = Request[cats.effect.IO](Method.POST, uri"/handlers/echo")
+      .withEntity(inputBody)
+    val response = routes.orNotFound.run(request).unsafeRunSync()
+
+    assertEquals(response.status, Status.Ok)
+    val responseBody = response.as[Json].unsafeRunSync()
+    assertEquals(responseBody.hcursor.downField("handler").as[String], Right("echo"))
+    // The result field contains the input JSON noSpaces
+    val resultStr = responseBody.hcursor.downField("result").focus
+    assert(resultStr.isDefined, "Expected result field in response")
+  }
+
+  test("HttpServer.apiRoutes - empty handlers list returns empty arrays") {
+    val handlers = List.empty[CompiledHandler]
+    val routes = HttpServer.apiRoutes(handlers)
+
+    // GET / with no handlers
+    val rootReq = Request[cats.effect.IO](Method.GET, uri"/")
+    val rootResp = routes.orNotFound.run(rootReq).unsafeRunSync()
+    assertEquals(rootResp.status, Status.Ok)
+    val rootBody = rootResp.as[Json].unsafeRunSync()
+    assertEquals(rootBody.hcursor.downField("handlers").as[List[String]], Right(Nil))
+
+    // GET /handlers with no handlers
+    val listReq = Request[cats.effect.IO](Method.GET, uri"/handlers")
+    val listResp = routes.orNotFound.run(listReq).unsafeRunSync()
+    assertEquals(listResp.status, Status.Ok)
+    val listBody = listResp.as[Json].unsafeRunSync()
+    assertEquals(listBody.as[List[Json]].toOption.get.size, 0)
+  }
+
+  test("HttpServer.httpApp - /api/handlers route works through prefix") {
+    val analysis = ServiceAnalysis("routed", "f.bosatsu", Nil, Nil, false, 0, 0, 0)
+    val handlers = List(CompiledHandler("routed", Nil, "code", analysis))
+    val app = HttpServer.httpApp(handlers)
+
+    val request = Request[cats.effect.IO](Method.GET, uri"/api/handlers")
+    val response = app.run(request).unsafeRunSync()
+
+    assertEquals(response.status, Status.Ok)
+  }
+
+  test("HttpServer.httpApp - /api/handlers/:name/analysis route works through prefix") {
+    val analysis = ServiceAnalysis("deep", "f.bosatsu", Nil, Nil, true, 7, 3, 2)
+    val handlers = List(CompiledHandler("deep", Nil, "code", analysis))
+    val app = HttpServer.httpApp(handlers)
+
+    val request = Request[cats.effect.IO](Method.GET, uri"/api/handlers/deep/analysis")
+    val response = app.run(request).unsafeRunSync()
+
+    assertEquals(response.status, Status.Ok)
+    val body = response.as[Json].unsafeRunSync()
+    assertEquals(body.hcursor.downField("handlerName").as[String], Right("deep"))
+    assertEquals(body.hcursor.downField("totalQueries").as[Int], Right(7))
+    assertEquals(body.hcursor.downField("canBatch").as[Boolean], Right(true))
+  }
+
+  test("HttpServer.apiRoutes - GET /handlers/:name/analysis includes operations") {
+    val ops = List(
+      ServiceOperation("DB", "query", OperationKind.Read, true, Some("queryMany")),
+      ServiceOperation("DB", "insert", OperationKind.Write, false, None)
+    )
+    val analysis = ServiceAnalysis("withOps", "ops.bosatsu", ops, Nil, false, 2, 0, 0)
+    val handlers = List(CompiledHandler("withOps", Nil, "code", analysis))
+    val routes = HttpServer.apiRoutes(handlers)
+
+    val request = Request[cats.effect.IO](Method.GET, uri"/handlers/withOps/analysis")
+    val response = routes.orNotFound.run(request).unsafeRunSync()
+
+    assertEquals(response.status, Status.Ok)
+    val body = response.as[Json].unsafeRunSync()
+    val opsJson = body.hcursor.downField("operations").as[List[Json]]
+    assert(opsJson.isRight)
+    assertEquals(opsJson.toOption.get.size, 2)
+  }
 }

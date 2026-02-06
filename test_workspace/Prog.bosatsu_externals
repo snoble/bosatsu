@@ -40,7 +40,8 @@
     list_append: ProgExt.ui_stub,
     list_remove_at: ProgExt.ui_stub,
     list_update_at: ProgExt.ui_stub,
-    list_length: ProgExt.ui_stub
+    list_length: ProgExt.ui_stub,
+    on_frame: ProgExt.ui_stub
   },
   Bosatsu/Numeric: {
     `+.`: ProgExt.numeric_stub,
@@ -68,7 +69,26 @@
     random_range: ProgExt.numeric_stub,
     min_Double: ProgExt.numeric_stub,
     max_Double: ProgExt.numeric_stub,
+    string_to_Double: ProgExt.numeric_stub,
     pi: ProgExt.numeric_stub,
     e_const: ProgExt.numeric_stub
+  },
+  Bosatsu/Canvas: {
+    arc: ProgExt.canvas_stub,
+    canvas_render: ProgExt.canvas_stub,
+    circle: ProgExt.canvas_stub,
+    clear: ProgExt.canvas_stub,
+    fill: ProgExt.canvas_stub,
+    line: ProgExt.canvas_stub,
+    line_width: ProgExt.canvas_stub,
+    rect: ProgExt.canvas_stub,
+    restore: ProgExt.canvas_stub,
+    rotate: ProgExt.canvas_stub,
+    save: ProgExt.canvas_stub,
+    scale: ProgExt.canvas_stub,
+    sequence: ProgExt.canvas_stub,
+    stroke: ProgExt.canvas_stub,
+    text_cmd: ProgExt.canvas_stub,
+    translate: ProgExt.canvas_stub
   }
 }

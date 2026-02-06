@@ -897,4 +897,786 @@ class TlaTest extends munit.FunSuite {
     val set = TlaValue.TlaSet(Set.empty)
     assertEquals(set.render, "{}")
   }
+
+  // ==========================================================================
+  // TlaGen.generateConfig - additional coverage
+  // ==========================================================================
+
+  test("TlaGen.generateConfig - no invariants produces no INVARIANT lines") {
+    val spec = TlaSpec(
+      moduleName = "NoInv",
+      extends_ = Nil,
+      variables = List("state", "pc"),
+      init = "Init == TRUE",
+      actions = Nil,
+      next = "Next == TRUE",
+      spec = "Spec == Init /\\ [][Next]_vars",
+      invariants = Nil
+    )
+    val config = TlaGen.generateConfig(spec, TlcOptions(checkDeadlock = true))
+    assert(config.contains("SPECIFICATION Spec"))
+    assert(!config.contains("INVARIANT"))
+  }
+
+  test("TlaGen.generateConfig - multiple invariants produce indexed INVARIANT lines") {
+    val spec = TlaSpec(
+      moduleName = "MultiInv",
+      extends_ = Nil,
+      variables = Nil,
+      init = "",
+      actions = Nil,
+      next = "",
+      spec = "",
+      invariants = List("x >= 0", "y < 100", "x + y < 200")
+    )
+    val config = TlaGen.generateConfig(spec, TlcOptions())
+    assert(config.contains("INVARIANT Inv0"))
+    assert(config.contains("INVARIANT Inv1"))
+    assert(config.contains("INVARIANT Inv2"))
+  }
+
+  test("TlaGen.generateConfig - checkDeadlock true omits CHECK_DEADLOCK FALSE") {
+    val spec = TlaSpec("M", Nil, Nil, "", Nil, "", "", Nil)
+    val config = TlaGen.generateConfig(spec, TlcOptions(checkDeadlock = true))
+    assert(!config.contains("CHECK_DEADLOCK FALSE"))
+  }
+
+  test("TlaGen.generateConfig - checkDeadlock false includes CHECK_DEADLOCK FALSE") {
+    val spec = TlaSpec("M", Nil, Nil, "", Nil, "", "", Nil)
+    val config = TlaGen.generateConfig(spec, TlcOptions(checkDeadlock = false))
+    assert(config.contains("CHECK_DEADLOCK FALSE"))
+  }
+
+  test("TlaGen.generateConfig - always starts with SPECIFICATION Spec") {
+    val spec = TlaSpec("M", Nil, Nil, "", Nil, "", "", Nil)
+    val config = TlaGen.generateConfig(spec, TlcOptions())
+    assert(config.startsWith("SPECIFICATION Spec"))
+  }
+
+  test("TlaGen.generateConfig - TlcOptions workers/depth/timeout do not affect config output") {
+    // generateConfig only uses checkDeadlock from TlcOptions and invariants from spec
+    val spec = TlaSpec("M", Nil, Nil, "", Nil, "", "", List("inv"))
+    val config1 = TlaGen.generateConfig(spec, TlcOptions(workers = 1))
+    val config2 = TlaGen.generateConfig(spec, TlcOptions(workers = 8, depth = Some(100), timeout = Some(60)))
+    assertEquals(config1, config2)
+  }
+
+  // ==========================================================================
+  // TlaGen.generate - mixed operations
+  // ==========================================================================
+
+  test("TlaGen.generate - read then write chain has correct pc transitions") {
+    val analysis = ServiceAnalysis(
+      handlerName = "readwrite",
+      sourceFile = "test.bosatsu",
+      operations = List(
+        ServiceOperation("DB", "get", OperationKind.Read, false, None),
+        ServiceOperation("DB", "set", OperationKind.Write, false, None)
+      ),
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 2,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(), 1)
+
+    val readAction = spec.actions.find(_.name.startsWith("Read_")).get
+    val writeAction = spec.actions.find(_.name.startsWith("Write_")).get
+
+    // Read starts at "start", write follows after read
+    assertEquals(readAction.pcFrom, "start")
+    assertEquals(readAction.pcTo, "read_0")
+    assertEquals(writeAction.pcFrom, "read_0")
+    assertEquals(writeAction.pcTo, "done")
+  }
+
+  test("TlaGen.generate - multiple reads then multiple writes") {
+    val analysis = ServiceAnalysis(
+      handlerName = "multi_rw",
+      sourceFile = "test.bosatsu",
+      operations = List(
+        ServiceOperation("DB", "get", OperationKind.Read, false, None),
+        ServiceOperation("Cache", "fetch", OperationKind.Read, false, None),
+        ServiceOperation("DB", "set", OperationKind.Write, false, None),
+        ServiceOperation("Cache", "put", OperationKind.Write, false, None)
+      ),
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 4,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(), 1)
+
+    val readActions = spec.actions.filter(_.name.startsWith("Read_"))
+    val writeActions = spec.actions.filter(_.name.startsWith("Write_"))
+
+    assertEquals(readActions.size, 2)
+    assertEquals(writeActions.size, 2)
+
+    // First read starts at "start"
+    assertEquals(readActions(0).pcFrom, "start")
+    assertEquals(readActions(0).pcTo, "read_0")
+    // Second read follows first
+    assertEquals(readActions(1).pcFrom, "read_0")
+    assertEquals(readActions(1).pcTo, "read_1")
+    // First write follows last read
+    assertEquals(writeActions(0).pcFrom, "read_1")
+    assertEquals(writeActions(0).pcTo, "write_0")
+    // Last write goes to done
+    assertEquals(writeActions(1).pcFrom, "write_0")
+    assertEquals(writeActions(1).pcTo, "done")
+  }
+
+  test("TlaGen.generate - read+write+unknown together") {
+    val analysis = ServiceAnalysis(
+      handlerName = "mixed_all",
+      sourceFile = "test.bosatsu",
+      operations = List(
+        ServiceOperation("DB", "get", OperationKind.Read, false, None),
+        ServiceOperation("API", "call", OperationKind.Unknown, false, None),
+        ServiceOperation("DB", "set", OperationKind.Write, false, None)
+      ),
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 3,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(), 1)
+
+    // Unknown operations are neither read nor write, so they are skipped
+    // Only read and write ops generate actions
+    val readActions = spec.actions.filter(_.name.startsWith("Read_"))
+    val writeActions = spec.actions.filter(_.name.startsWith("Write_"))
+    assert(readActions.nonEmpty)
+    assert(writeActions.nonEmpty)
+  }
+
+  test("TlaGen.generate - only unknown operations produces Complete action") {
+    val analysis = ServiceAnalysis(
+      handlerName = "unknown_only",
+      sourceFile = "test.bosatsu",
+      operations = List(
+        ServiceOperation("API", "call", OperationKind.Unknown, false, None),
+        ServiceOperation("API", "notify", OperationKind.Unknown, false, None)
+      ),
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 2,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(), 1)
+
+    // No read or write operations means empty read/write lists
+    // so we get the Complete action
+    assertEquals(spec.actions.head.name, "Complete")
+    assertEquals(spec.actions.head.pcFrom, "start")
+    assertEquals(spec.actions.head.pcTo, "done")
+  }
+
+  test("TlaGen.generate - read-only handler gets Complete action after last read") {
+    val analysis = ServiceAnalysis(
+      handlerName = "readonly",
+      sourceFile = "test.bosatsu",
+      operations = List(
+        ServiceOperation("DB", "get", OperationKind.Read, false, None),
+        ServiceOperation("Cache", "find", OperationKind.Read, false, None)
+      ),
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 2,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(), 1)
+
+    val completeAction = spec.actions.find(_.name == "Complete").get
+    assertEquals(completeAction.pcFrom, "read_1")
+    assertEquals(completeAction.pcTo, "done")
+  }
+
+  // ==========================================================================
+  // TlaGen.generate - custom state variable and options
+  // ==========================================================================
+
+  test("TlaGen.generate - custom stateVariable name") {
+    val analysis = ServiceAnalysis(
+      handlerName = "custom_state",
+      sourceFile = "test.bosatsu",
+      operations = List(
+        ServiceOperation("DB", "set", OperationKind.Write, false, None)
+      ),
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 1,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val options = TlaOptions(stateVariable = "db_state")
+    val spec = TlaGen.generate(analysis, options, 1)
+
+    assert(spec.variables.contains("db_state"))
+    assert(!spec.variables.contains("state"))
+    // Actions should reference the custom state variable
+    val writeAction = spec.actions.find(_.name.startsWith("Write_")).get
+    assert(writeAction.effect.contains("db_state"))
+  }
+
+  test("TlaGen.generate - combined initial state and invariant") {
+    val analysis = ServiceAnalysis(
+      handlerName = "combo",
+      sourceFile = "test.bosatsu",
+      operations = Nil,
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 0,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val options = TlaOptions(
+      initialState = Map("count" -> TlaValue.TlaInt(0), "active" -> TlaValue.TlaBool(true)),
+      invariant = Some("state[\"count\"] >= 0")
+    )
+    val spec = TlaGen.generate(analysis, options, 1)
+
+    assert(spec.init.contains("count"))
+    assert(spec.init.contains("active"))
+    assert(spec.invariants.contains("state[\"count\"] >= 0"))
+  }
+
+  test("TlaGen.generate - empty initial state uses default") {
+    val analysis = ServiceAnalysis(
+      handlerName = "empty_init",
+      sourceFile = "test.bosatsu",
+      operations = Nil,
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 0,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val options = TlaOptions(initialState = Map.empty)
+    val spec = TlaGen.generate(analysis, options, 1)
+
+    // With empty initial state, should use the empty record form
+    assert(spec.init.contains("x \\in {} |-> 0"))
+  }
+
+  // ==========================================================================
+  // sanitizeName / sanitizeModuleName edge cases
+  // ==========================================================================
+
+  test("TlaGen.sanitizeName - name starting with digit gets prefix") {
+    val analysis = ServiceAnalysis(
+      handlerName = "123handler",
+      sourceFile = "test.bosatsu",
+      operations = Nil,
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 0,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(), 1)
+    // Module name starting with digit should get M_ prefix
+    assert(spec.moduleName.startsWith("M_"))
+    assert(spec.moduleName.contains("123handler"))
+  }
+
+  test("TlaGen.sanitizeName - all special characters replaced") {
+    val analysis = ServiceAnalysis(
+      handlerName = "my-handler.v2@prod",
+      sourceFile = "test.bosatsu",
+      operations = Nil,
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 0,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(), 1)
+    // Hyphens, dots, @ signs should be replaced with underscores
+    assert(!spec.moduleName.contains("-"))
+    assert(!spec.moduleName.contains("."))
+    assert(!spec.moduleName.contains("@"))
+    assert(spec.moduleName.contains("_"))
+  }
+
+  test("TlaGen.sanitizeName - underscores preserved") {
+    val analysis = ServiceAnalysis(
+      handlerName = "my_handler_v2",
+      sourceFile = "test.bosatsu",
+      operations = Nil,
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 0,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(), 1)
+    assertEquals(spec.moduleName, "my_handler_v2")
+  }
+
+  test("TlaGen.sanitizeName - alphanumeric preserved") {
+    val analysis = ServiceAnalysis(
+      handlerName = "SimpleHandler42",
+      sourceFile = "test.bosatsu",
+      operations = Nil,
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 0,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(), 1)
+    assertEquals(spec.moduleName, "SimpleHandler42")
+  }
+
+  test("TlaGen.sanitizeName - operation method names sanitized in action names") {
+    val analysis = ServiceAnalysis(
+      handlerName = "test",
+      sourceFile = "test.bosatsu",
+      operations = List(
+        ServiceOperation("DB", "get-item", OperationKind.Read, false, None)
+      ),
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 1,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(), 1)
+    val readAction = spec.actions.find(_.name.startsWith("Read_")).get
+    // Method "get-item" should have hyphen replaced
+    assert(!readAction.name.contains("-"))
+    assert(readAction.name.contains("get_item"))
+  }
+
+  // ==========================================================================
+  // TlaSpec.render - additional output format tests
+  // ==========================================================================
+
+  test("TlaSpec.render - multiple EXTENDS") {
+    val spec = TlaSpec(
+      moduleName = "MultiExtends",
+      extends_ = List("Integers", "Sequences", "TLC", "FiniteSets"),
+      variables = List("x"),
+      init = "Init == x = 0",
+      actions = Nil,
+      next = "Next == TRUE",
+      spec = "Spec == Init"
+    )
+    val rendered = spec.render
+    assert(rendered.contains("EXTENDS Integers, Sequences, TLC, FiniteSets"))
+  }
+
+  test("TlaSpec.render - vars definition") {
+    val spec = TlaSpec(
+      moduleName = "VarsTest",
+      extends_ = Nil,
+      variables = List("state", "pc", "counter"),
+      init = "Init == TRUE",
+      actions = Nil,
+      next = "Next == TRUE",
+      spec = "Spec == Init"
+    )
+    val rendered = spec.render
+    assert(rendered.contains("vars == <<state, pc, counter>>"))
+    assert(rendered.contains("VARIABLES state, pc, counter"))
+  }
+
+  test("TlaSpec.render - Done formula always present") {
+    val spec = TlaSpec(
+      moduleName = "DoneTest",
+      extends_ = Nil,
+      variables = List("state", "pc"),
+      init = "Init == TRUE",
+      actions = Nil,
+      next = "Next == Done",
+      spec = "Spec == Init"
+    )
+    val rendered = spec.render
+    assert(rendered.contains("Done =="))
+    assert(rendered.contains("""pc = "done""""))
+    assert(rendered.contains("UNCHANGED vars"))
+  }
+
+  test("TlaSpec.render - Next formula present") {
+    val spec = TlaSpec(
+      moduleName = "NextTest",
+      extends_ = Nil,
+      variables = List("x"),
+      init = "Init == x = 0",
+      actions = List(TlaAction("Step", "TRUE", "x' = x + 1", "start", "end")),
+      next = "Next == Step \\/ Done",
+      spec = "Spec == Init /\\ [][Next]_vars"
+    )
+    val rendered = spec.render
+    assert(rendered.contains("Next == Step \\/ Done"))
+  }
+
+  test("TlaSpec.render - Spec formula present") {
+    val spec = TlaSpec(
+      moduleName = "SpecTest",
+      extends_ = Nil,
+      variables = List("x"),
+      init = "Init == x = 0",
+      actions = Nil,
+      next = "Next == TRUE",
+      spec = "Spec == Init /\\ [][Next]_vars"
+    )
+    val rendered = spec.render
+    assert(rendered.contains("Spec == Init /\\ [][Next]_vars"))
+  }
+
+  test("TlaSpec.render - action guard and effect in single instance") {
+    val spec = TlaSpec(
+      moduleName = "ActionTest",
+      extends_ = Nil,
+      variables = List("state", "pc"),
+      init = "Init == TRUE",
+      actions = List(
+        TlaAction("Increment", "state > 0", "state' = state + 1", "start", "done")
+      ),
+      next = "Next == Increment \\/ Done",
+      spec = "Spec == Init"
+    )
+    val rendered = spec.render
+    assert(rendered.contains("Increment =="))
+    assert(rendered.contains("/\\ state > 0"))
+    assert(rendered.contains("/\\ state' = state + 1"))
+    assert(rendered.contains("pc = \"start\""))
+    assert(rendered.contains("pc' = \"done\""))
+  }
+
+  test("TlaSpec.render - multiple actions") {
+    val spec = TlaSpec(
+      moduleName = "MultiAction",
+      extends_ = Nil,
+      variables = List("state", "pc"),
+      init = "Init == TRUE",
+      actions = List(
+        TlaAction("Read", "TRUE", "UNCHANGED state", "start", "reading"),
+        TlaAction("Write", "TRUE", "state' = state", "reading", "done")
+      ),
+      next = "Next == Read \\/ Write \\/ Done",
+      spec = "Spec == Init"
+    )
+    val rendered = spec.render
+    assert(rendered.contains("Read =="))
+    assert(rendered.contains("Write =="))
+    assert(rendered.contains("pc = \"start\""))
+    assert(rendered.contains("pc' = \"reading\""))
+    assert(rendered.contains("pc = \"reading\""))
+    assert(rendered.contains("pc' = \"done\""))
+  }
+
+  test("TlaSpec.render - starts with MODULE header and ends with ====") {
+    val spec = TlaSpec(
+      moduleName = "Boundaries",
+      extends_ = Nil,
+      variables = List("x"),
+      init = "Init == x = 0",
+      actions = Nil,
+      next = "Next == TRUE",
+      spec = "Spec == Init"
+    )
+    val rendered = spec.render
+    assert(rendered.contains("---- MODULE Boundaries ----"))
+    assert(rendered.trim.endsWith("===="))
+  }
+
+  // ==========================================================================
+  // TlaGen.generateNext tests
+  // ==========================================================================
+
+  test("TlaGen.generate - Next formula includes all action names plus Done") {
+    val analysis = ServiceAnalysis(
+      handlerName = "next_test",
+      sourceFile = "test.bosatsu",
+      operations = List(
+        ServiceOperation("DB", "get", OperationKind.Read, false, None),
+        ServiceOperation("DB", "set", OperationKind.Write, false, None)
+      ),
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 2,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(), 1)
+
+    assert(spec.next.startsWith("Next =="))
+    assert(spec.next.contains("Done"))
+    // All action names should be in the Next disjunction
+    for (action <- spec.actions) {
+      assert(spec.next.contains(action.name), s"Next should contain ${action.name}")
+    }
+    assert(spec.next.contains("\\/"))
+  }
+
+  // ==========================================================================
+  // TlaGen.generate - multi-instance details
+  // ==========================================================================
+
+  test("TlaGen.generate - multi-instance Init uses function for pc") {
+    val analysis = ServiceAnalysis(
+      handlerName = "multi",
+      sourceFile = "test.bosatsu",
+      operations = List(
+        ServiceOperation("DB", "get", OperationKind.Read, false, None)
+      ),
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 1,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(), instances = 3)
+
+    // pc should be a function for multi-instance
+    assert(spec.init.contains("""pc = [i \in 1..3 |-> "start"]"""))
+    // instance variable should be set
+    assert(spec.init.contains("instance = 1..3"))
+  }
+
+  test("TlaGen.generate - single instance Init uses simple pc string") {
+    val analysis = ServiceAnalysis(
+      handlerName = "single",
+      sourceFile = "test.bosatsu",
+      operations = List(
+        ServiceOperation("DB", "get", OperationKind.Read, false, None)
+      ),
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 1,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(), instances = 1)
+
+    assert(spec.init.contains("""pc = "start""""))
+    assert(!spec.init.contains("instance"))
+  }
+
+  test("TlaGen.generate - multi-instance variables include instance") {
+    val analysis = ServiceAnalysis(
+      handlerName = "vars_test",
+      sourceFile = "test.bosatsu",
+      operations = Nil,
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 0,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val specSingle = TlaGen.generate(analysis, TlaOptions(), instances = 1)
+    val specMulti = TlaGen.generate(analysis, TlaOptions(), instances = 2)
+
+    assert(!specSingle.variables.contains("instance"))
+    assert(specMulti.variables.contains("instance"))
+    assert(specSingle.variables.contains("pc"))
+    assert(specMulti.variables.contains("pc"))
+  }
+
+  // ==========================================================================
+  // TlaGen.generate - Spec formula
+  // ==========================================================================
+
+  test("TlaGen.generate - Spec formula always set") {
+    val analysis = ServiceAnalysis(
+      handlerName = "spec_test",
+      sourceFile = "test.bosatsu",
+      operations = Nil,
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 0,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(), 1)
+    assertEquals(spec.spec, "Spec == Init /\\ [][Next]_vars")
+  }
+
+  test("TlaGen.generate - extends always includes Integers, Sequences, TLC") {
+    val analysis = ServiceAnalysis(
+      handlerName = "extends_test",
+      sourceFile = "test.bosatsu",
+      operations = Nil,
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 0,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(), 1)
+    assertEquals(spec.extends_, List("Integers", "Sequences", "TLC"))
+  }
+
+  // ==========================================================================
+  // TlaGen.generate - write action effect
+  // ==========================================================================
+
+  test("TlaGen.generate - write action effect references state variable") {
+    val analysis = ServiceAnalysis(
+      handlerName = "write_effect",
+      sourceFile = "test.bosatsu",
+      operations = List(
+        ServiceOperation("DB", "set", OperationKind.Write, false, None)
+      ),
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 1,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(stateVariable = "mydb"), 1)
+    val writeAction = spec.actions.find(_.name.startsWith("Write_")).get
+    assert(writeAction.effect.contains("mydb"))
+  }
+
+  test("TlaGen.generate - read action effect is UNCHANGED state") {
+    val analysis = ServiceAnalysis(
+      handlerName = "read_effect",
+      sourceFile = "test.bosatsu",
+      operations = List(
+        ServiceOperation("DB", "get", OperationKind.Read, false, None)
+      ),
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 1,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(), 1)
+    val readAction = spec.actions.find(_.name.startsWith("Read_")).get
+    assert(readAction.effect.contains("UNCHANGED state"))
+  }
+
+  // ==========================================================================
+  // TlaSpec.render - round-trip with TlaGen.generate
+  // ==========================================================================
+
+  test("TlaSpec.render - generated spec renders valid TLA+") {
+    val analysis = ServiceAnalysis(
+      handlerName = "full_roundtrip",
+      sourceFile = "test.bosatsu",
+      operations = List(
+        ServiceOperation("DB", "get", OperationKind.Read, false, None),
+        ServiceOperation("DB", "set", OperationKind.Write, false, None)
+      ),
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 2,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val options = TlaOptions(
+      initialState = Map("count" -> TlaValue.TlaInt(0)),
+      invariant = Some("state[\"count\"] >= 0")
+    )
+    val spec = TlaGen.generate(analysis, options, 1)
+    val rendered = spec.render
+
+    // Verify structure
+    assert(rendered.contains("---- MODULE full_roundtrip ----"))
+    assert(rendered.contains("EXTENDS Integers, Sequences, TLC"))
+    assert(rendered.contains("VARIABLES"))
+    assert(rendered.contains("Init =="))
+    assert(rendered.contains("Read_"))
+    assert(rendered.contains("Write_"))
+    assert(rendered.contains("Done =="))
+    assert(rendered.contains("Next =="))
+    assert(rendered.contains("Spec =="))
+    assert(rendered.contains("Inv0 == state[\"count\"] >= 0"))
+    assert(rendered.contains("===="))
+  }
+
+  test("TlaSpec.render - generated multi-instance spec renders valid TLA+") {
+    val analysis = ServiceAnalysis(
+      handlerName = "concurrent",
+      sourceFile = "test.bosatsu",
+      operations = List(
+        ServiceOperation("DB", "get", OperationKind.Read, false, None),
+        ServiceOperation("DB", "set", OperationKind.Write, false, None)
+      ),
+      batchGroups = Nil,
+      canBatch = false,
+      totalQueries = 2,
+      batchedQueries = 0,
+      queriesSaved = 0
+    )
+    val spec = TlaGen.generate(analysis, TlaOptions(invariant = Some("TRUE")), instances = 2)
+    val rendered = spec.render
+
+    assert(rendered.contains("---- MODULE concurrent ----"))
+    assert(rendered.contains("VARIABLES state, pc, instance"))
+    // Multi-instance actions use self parameter
+    assert(rendered.contains("(self) =="))
+    assert(rendered.contains("pc[self]"))
+    assert(rendered.contains("EXCEPT ![self]"))
+  }
+
+  // ==========================================================================
+  // TlaValue.TlaRecord - multi-field render
+  // ==========================================================================
+
+  test("TlaValue.TlaRecord - multiple fields render") {
+    val record = TlaValue.TlaRecord(Map(
+      "a" -> TlaValue.TlaInt(1),
+      "b" -> TlaValue.TlaString("hello")
+    ))
+    val rendered = record.render
+    assert(rendered.startsWith("["))
+    assert(rendered.endsWith("]"))
+    assert(rendered.contains("a |-> 1"))
+    assert(rendered.contains("b |-> \"hello\""))
+  }
+
+  test("TlaValue.TlaSeq - single element") {
+    val seq = TlaValue.TlaSeq(List(TlaValue.TlaInt(42)))
+    assertEquals(seq.render, "<<42>>")
+  }
+
+  test("TlaValue.TlaSet - single element") {
+    val set = TlaValue.TlaSet(Set(TlaValue.TlaBool(true)))
+    assertEquals(set.render, "{TRUE}")
+  }
+
+  // ==========================================================================
+  // TlaValue.fromAny - edge cases
+  // ==========================================================================
+
+  test("TlaValue.fromAny - negative Int") {
+    val result = TlaValue.fromAny(-5)
+    assertEquals(result.render, "-5")
+  }
+
+  test("TlaValue.fromAny - zero Int") {
+    val result = TlaValue.fromAny(0)
+    assertEquals(result.render, "0")
+  }
+
+  test("TlaValue.fromAny - empty String") {
+    val result = TlaValue.fromAny("")
+    assertEquals(result.render, "\"\"")
+  }
+
+  test("TlaValue.fromAny - empty Seq") {
+    val result = TlaValue.fromAny(Seq.empty)
+    assertEquals(result.render, "<<>>")
+  }
+
+  test("TlaValue.fromAny - empty Map") {
+    val result = TlaValue.fromAny(Map.empty[String, Int])
+    assertEquals(result.render, "[]")
+  }
+
+  test("TlaValue.fromAny - nested Seq of Seq") {
+    val result = TlaValue.fromAny(Seq(Seq(1, 2), Seq(3)))
+    assertEquals(result.render, "<<<<1, 2>>, <<3>>>>")
+  }
 }
