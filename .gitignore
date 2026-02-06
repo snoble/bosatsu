@@ -16,6 +16,7 @@ target/
 lib_managed/
 src_managed/
 project/boot/
+project/.boot/
 project/target/
 project/plugins/project/
 
@@ -39,6 +40,7 @@ bazel-*
 
 # js
 node_modules/
+package-lock.json
 
 # vscode wants to put metals directories here
 .metals
@@ -47,8 +49,25 @@ project/metals.sbt
 project/project/*
 jsui/bosatsu_ui.js
 
+# c runtime build artifacts
 c_runtime/*.o
 c_runtime/*.a
 c_runtime/test_exe
 c_runtime/test_out
 c_runtime/boehm_example
+
+# Generated output - Python transpiler
+pyout/
+
+# Generated output - standalone HTML
+output.html
+
+# Test artifacts
+playwright-report/
+test-results/
+
+# OS files
+.DS_Store
+
+# nix
+result
