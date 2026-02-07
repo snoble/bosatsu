@@ -1795,8 +1795,10 @@ class UIAnalyzerTest extends FunSuite {
   // Props with Local state bindings
   // ==========================================================================
 
-  test("extractPropsBindings with Local arg bound to state") {
+  test("extractPropsBindings with Local arg bound to state in generic App") {
     // h("div", someApp(stateVar), []) where stateVar is tracked
+    // When props is a generic function call (not attribute tuples), no bindings created
+    // because we can't determine the attribute name from just a function call
     val count = Identifier.unsafeBindable("count")
 
     val hFn = makeGlobal("Bosatsu/UI", "h")
@@ -1809,8 +1811,8 @@ class UIAnalyzerTest extends FunSuite {
     val hApp = makeApp(hFn, tag, propsApp, children)
 
     val analysis = UIAnalyzer.analyzeWithStateBindings(hApp, List(count))
-    // Should create className binding for the tracked state in props
-    assert(analysis.bindings.exists(_.property == UIAnalyzer.DOMProperty.ClassName))
+    // No bindings created - can't determine attribute from generic function call
+    assert(analysis.bindings.isEmpty)
   }
 
   // ==========================================================================
@@ -3134,5 +3136,999 @@ class UIAnalyzerTest extends FunSuite {
     // ListPat goes to case _ => None in extractVariantTag
     // This doesn't create a condition with variant tag
     assert(analysis != null)
+  }
+
+  // ==========================================================================
+  // hasIOType tests
+  // ==========================================================================
+
+  // Helper to create an IO[A] type
+  private def makeIOType(inner: Type): Type = {
+    val ioPack = PackageName.parse("Bosatsu/IO").get
+    val ioTypeName = dev.bosatsu.TypeName(Identifier.Constructor("IO"))
+    val ioConst = Type.TyConst(Type.Const.Defined(ioPack, ioTypeName))
+    Type.TyApply(ioConst, inner)
+  }
+
+  test("hasIOType returns true for expression with IO return type") {
+    val ioType = makeIOType(Type.IntType)
+    val expr = TypedExpr.Literal(Lit.Integer(42), ioType, ())
+    assert(UIAnalyzer.hasIOType(expr))
+  }
+
+  test("hasIOType returns false for expression with non-IO type") {
+    val expr = makeLiteral(42) // Type.IntType
+    assert(!UIAnalyzer.hasIOType(expr))
+  }
+
+  test("hasIOType returns true for IO type from short IO package") {
+    val ioPack = PackageName.parse("IO").get
+    val ioTypeName = dev.bosatsu.TypeName(Identifier.Constructor("IO"))
+    val ioConst = Type.TyConst(Type.Const.Defined(ioPack, ioTypeName))
+    val ioType = Type.TyApply(ioConst, Type.StrType)
+    val expr = TypedExpr.Literal(Lit.Str("hello"), ioType, ())
+    assert(UIAnalyzer.hasIOType(expr))
+  }
+
+  test("hasIOType returns false for type with no root constant") {
+    // A type variable has no root constant
+    val typeVar = Type.TyVar(Type.Var.Bound("A"))
+    val expr = TypedExpr.Literal(Lit.Integer(1), typeVar, ())
+    assert(!UIAnalyzer.hasIOType(expr))
+  }
+
+  test("hasIOType returns false for non-IO defined type") {
+    val otherPack = PackageName.parse("Bosatsu/Other").get
+    val otherTypeName = dev.bosatsu.TypeName(Identifier.Constructor("Maybe"))
+    val otherConst = Type.TyConst(Type.Const.Defined(otherPack, otherTypeName))
+    val otherType = Type.TyApply(otherConst, Type.IntType)
+    val expr = TypedExpr.Literal(Lit.Integer(1), otherType, ())
+    assert(!UIAnalyzer.hasIOType(expr))
+  }
+
+  // ==========================================================================
+  // unwrapIOType tests
+  // ==========================================================================
+
+  test("unwrapIOType returns Some(inner) for IO[A] type") {
+    val ioType = makeIOType(Type.IntType)
+    val result = UIAnalyzer.unwrapIOType(ioType)
+    assertEquals(result, Some(Type.IntType))
+  }
+
+  test("unwrapIOType returns None for non-IO type") {
+    val result = UIAnalyzer.unwrapIOType(Type.IntType)
+    assertEquals(result, None)
+  }
+
+  test("unwrapIOType returns None for TyApply that is not IO") {
+    val otherPack = PackageName.parse("Bosatsu/List").get
+    val otherTypeName = dev.bosatsu.TypeName(Identifier.Constructor("List"))
+    val otherConst = Type.TyConst(Type.Const.Defined(otherPack, otherTypeName))
+    val listType = Type.TyApply(otherConst, Type.IntType)
+    val result = UIAnalyzer.unwrapIOType(listType)
+    assertEquals(result, None)
+  }
+
+  test("unwrapIOType returns Some for nested IO type") {
+    val innerIO = makeIOType(Type.IntType)
+    val outerIO = makeIOType(innerIO)
+    val result = UIAnalyzer.unwrapIOType(outerIO)
+    assertEquals(result, Some(innerIO))
+  }
+
+  // ==========================================================================
+  // isListStateCreationExpr tests
+  // ==========================================================================
+
+  test("isListStateCreationExpr returns true for list_state(initial) call") {
+    val listStateFn = makeGlobal("Bosatsu/UI", "list_state")
+    val listStateApp = makeApp(listStateFn, makeLiteral(0))
+    assert(UIAnalyzer.isListStateCreationExpr(listStateApp))
+  }
+
+  test("isListStateCreationExpr returns true for short UI package") {
+    val listStateFn = makeGlobal("UI", "list_state")
+    val listStateApp = makeApp(listStateFn, makeLiteral(0))
+    assert(UIAnalyzer.isListStateCreationExpr(listStateApp))
+  }
+
+  test("isListStateCreationExpr returns true for annotated list_state call") {
+    val listStateFn = makeAnnotation(makeGlobal("Bosatsu/UI", "list_state"))
+    val listStateApp = makeApp(listStateFn, makeLiteral(0))
+    assert(UIAnalyzer.isListStateCreationExpr(listStateApp))
+  }
+
+  test("isListStateCreationExpr returns true for Generic-wrapped list_state call") {
+    val listStateFn = makeGeneric(makeGlobal("Bosatsu/UI", "list_state"))
+    val listStateApp = makeApp(listStateFn, makeLiteral(0))
+    assert(UIAnalyzer.isListStateCreationExpr(listStateApp))
+  }
+
+  test("isListStateCreationExpr returns false for regular state call") {
+    val stateFn = makeGlobal("Bosatsu/UI", "state")
+    val stateApp = makeApp(stateFn, makeLiteral(0))
+    assert(!UIAnalyzer.isListStateCreationExpr(stateApp))
+  }
+
+  test("isListStateCreationExpr returns false for non-UI package") {
+    val otherFn = makeGlobal("Other/Package", "list_state")
+    val otherApp = makeApp(otherFn, makeLiteral(0))
+    assert(!UIAnalyzer.isListStateCreationExpr(otherApp))
+  }
+
+  test("isListStateCreationExpr returns false for literal expression") {
+    assert(!UIAnalyzer.isListStateCreationExpr(makeLiteral(42)))
+  }
+
+  test("isListStateCreationExpr returns false for local variable") {
+    assert(!UIAnalyzer.isListStateCreationExpr(makeLocal("x")))
+  }
+
+  test("isListStateCreationExpr returns false for non-list_state function") {
+    val readFn = makeGlobal("Bosatsu/UI", "read")
+    val readApp = makeApp(readFn, makeLocal("x"))
+    assert(!UIAnalyzer.isListStateCreationExpr(readApp))
+  }
+
+  // isStateCreationExpr also recognizes list_state
+  test("isStateCreationExpr returns true for list_state(initial) call") {
+    val listStateFn = makeGlobal("Bosatsu/UI", "list_state")
+    val listStateApp = makeApp(listStateFn, makeLiteral(0))
+    assert(UIAnalyzer.isStateCreationExpr(listStateApp))
+  }
+
+  // ==========================================================================
+  // CanvasBinding case class tests
+  // ==========================================================================
+
+  test("CanvasBinding construction and field access") {
+    import UIAnalyzer._
+
+    val renderFn = makeLambda(List("st"), makeLiteral(0))
+    val stateExpr = makeLocal("canvasState")
+
+    val binding = CanvasBinding[Unit](
+      elementId = "canvas-1",
+      statePath = List("canvas", "state"),
+      renderFn = renderFn,
+      stateExpr = stateExpr
+    )
+
+    assertEquals(binding.elementId, "canvas-1")
+    assertEquals(binding.statePath, List("canvas", "state"))
+    assertEquals(binding.renderFn, renderFn)
+    assertEquals(binding.stateExpr, stateExpr)
+  }
+
+  test("CanvasBinding with empty statePath") {
+    import UIAnalyzer._
+
+    val renderFn = makeLiteral(0)
+    val stateExpr = makeLiteral(0)
+
+    val binding = CanvasBinding[Unit](
+      elementId = "canvas-empty",
+      statePath = Nil,
+      renderFn = renderFn,
+      stateExpr = stateExpr
+    )
+
+    assertEquals(binding.elementId, "canvas-empty")
+    assertEquals(binding.statePath, Nil)
+  }
+
+  // ==========================================================================
+  // FrameCallback case class tests
+  // ==========================================================================
+
+  test("FrameCallback construction and field access") {
+    import UIAnalyzer._
+
+    val handler = makeLambda(List("dt"), makeLiteral(0))
+    val callback = FrameCallback[Unit](handler = handler)
+
+    assertEquals(callback.handler, handler)
+  }
+
+  test("FrameCallback with literal handler") {
+    import UIAnalyzer._
+
+    val handler = makeLiteral(42)
+    val callback = FrameCallback[Unit](handler = handler)
+    assertEquals(callback.handler, handler)
+  }
+
+  // ==========================================================================
+  // UIAnalysis.combine with canvasBindings and frameCallbacks
+  // ==========================================================================
+
+  test("UIAnalysis.empty includes empty canvasBindings and frameCallbacks") {
+    val empty = UIAnalyzer.UIAnalysis.empty[Unit]
+    assertEquals(empty.canvasBindings, Nil)
+    assertEquals(empty.frameCallbacks, Nil)
+  }
+
+  test("UIAnalysis.combine merges canvasBindings") {
+    import UIAnalyzer._
+
+    val renderA = makeLambda(List("s"), makeLiteral(0))
+    val stateA = makeLocal("stateA")
+    val renderB = makeLambda(List("s"), makeLiteral(1))
+    val stateB = makeLocal("stateB")
+
+    val a = UIAnalysis[Unit](
+      stateReads = List(List("a")),
+      bindings = Nil,
+      eventHandlers = Nil,
+      canvasBindings = List(CanvasBinding("canvas-a", List("a"), renderA, stateA)),
+      frameCallbacks = Nil
+    )
+    val b = UIAnalysis[Unit](
+      stateReads = List(List("b")),
+      bindings = Nil,
+      eventHandlers = Nil,
+      canvasBindings = List(CanvasBinding("canvas-b", List("b"), renderB, stateB)),
+      frameCallbacks = Nil
+    )
+    val combined = UIAnalysis.combine(a, b)
+    assertEquals(combined.canvasBindings.length, 2)
+    assertEquals(combined.canvasBindings.head.elementId, "canvas-a")
+    assertEquals(combined.canvasBindings(1).elementId, "canvas-b")
+  }
+
+  test("UIAnalysis.combine merges frameCallbacks") {
+    import UIAnalyzer._
+
+    val handlerA = makeLambda(List("dt"), makeLiteral(0))
+    val handlerB = makeLambda(List("dt"), makeLiteral(1))
+
+    val a = UIAnalysis[Unit](
+      stateReads = Nil,
+      bindings = Nil,
+      eventHandlers = Nil,
+      canvasBindings = Nil,
+      frameCallbacks = List(FrameCallback(handlerA))
+    )
+    val b = UIAnalysis[Unit](
+      stateReads = Nil,
+      bindings = Nil,
+      eventHandlers = Nil,
+      canvasBindings = Nil,
+      frameCallbacks = List(FrameCallback(handlerB))
+    )
+    val combined = UIAnalysis.combine(a, b)
+    assertEquals(combined.frameCallbacks.length, 2)
+    assertEquals(combined.frameCallbacks.head.handler, handlerA)
+    assertEquals(combined.frameCallbacks(1).handler, handlerB)
+  }
+
+  test("UIAnalysis.combine merges all fields including canvas and frame") {
+    import UIAnalyzer._
+
+    val expr = makeLiteral(42)
+    val renderFn = makeLambda(List("s"), makeLiteral(0))
+    val stateExpr = makeLocal("st")
+    val handlerExpr = makeLambda(List("dt"), makeLiteral(0))
+
+    val a = UIAnalysis[Unit](
+      stateReads = List(List("count")),
+      bindings = List(DOMBinding("e1", DOMProperty.TextContent, List("count"), None, None, expr)),
+      eventHandlers = List(EventBinding("e1", "click", expr, true, false)),
+      canvasBindings = List(CanvasBinding("c1", List("st"), renderFn, stateExpr)),
+      frameCallbacks = List(FrameCallback(handlerExpr))
+    )
+    val b = UIAnalysis.empty[Unit]
+    val combined = UIAnalysis.combine(a, b)
+    assertEquals(combined.stateReads.length, 1)
+    assertEquals(combined.bindings.length, 1)
+    assertEquals(combined.eventHandlers.length, 1)
+    assertEquals(combined.canvasBindings.length, 1)
+    assertEquals(combined.frameCallbacks.length, 1)
+  }
+
+  // ==========================================================================
+  // bindingsToJs - valid JavaScript binding map
+  // ==========================================================================
+
+  test("bindingsToJs generates valid binding map with multiple paths") {
+    import UIAnalyzer._
+
+    val expr = makeLiteral(42)
+
+    val binding1 = DOMBinding[Unit]("e1", DOMProperty.TextContent, List("count"), None, None, expr)
+    val binding2 = DOMBinding[Unit]("e2", DOMProperty.ClassName, List("status"), None, None, expr)
+    val binding3 = DOMBinding[Unit]("e3", DOMProperty.Value, List("input", "text"), None, None, expr)
+
+    val js = bindingsToJs(List(binding1, binding2, binding3))
+
+    // Should be a valid JS object literal
+    assert(js.startsWith("{"))
+    assert(js.endsWith("}"))
+    // Should contain all path keys
+    assert(js.contains("\"count\""))
+    assert(js.contains("\"status\""))
+    assert(js.contains("\"input.text\""))
+    // Should contain all element IDs
+    assert(js.contains("\"elementId\": \"e1\""))
+    assert(js.contains("\"elementId\": \"e2\""))
+    assert(js.contains("\"elementId\": \"e3\""))
+    // Should contain property names
+    assert(js.contains("\"property\": \"textContent\""))
+    assert(js.contains("\"property\": \"className\""))
+    assert(js.contains("\"property\": \"value\""))
+  }
+
+  test("bindingsToJs handles checked and disabled properties") {
+    import UIAnalyzer._
+
+    val expr = makeLiteral(42)
+
+    val checkedBinding = DOMBinding[Unit]("e1", DOMProperty.Checked, List("isActive"), None, None, expr)
+    val disabledBinding = DOMBinding[Unit]("e2", DOMProperty.Disabled, List("isLocked"), None, None, expr)
+
+    val js = bindingsToJs(List(checkedBinding, disabledBinding))
+    assert(js.contains("\"property\": \"checked\""))
+    assert(js.contains("\"property\": \"disabled\""))
+  }
+
+  test("bindingsToJs generates computeValue for style bindings with stateNames") {
+    import UIAnalyzer._
+
+    // Create a style binding where sourceExpr is a Local that is a state name
+    val localExpr = makeLocal("xPos")
+
+    val binding = DOMBinding[Unit](
+      elementId = "e1",
+      property = DOMProperty.Style("transform"),
+      statePath = List("xPos"),
+      when = None,
+      transform = None,
+      sourceExpr = localExpr
+    )
+
+    val js = bindingsToJs(List(binding), Set("xPos"))
+    // Should include computeValue for style binding
+    assert(js.contains("\"computeValue\""))
+    assert(js.contains("xPos.value"))
+  }
+
+  test("bindingsToJs does not generate computeValue for non-style bindings") {
+    import UIAnalyzer._
+
+    val localExpr = makeLocal("count")
+
+    val binding = DOMBinding[Unit](
+      elementId = "e1",
+      property = DOMProperty.TextContent,
+      statePath = List("count"),
+      when = None,
+      transform = None,
+      sourceExpr = localExpr
+    )
+
+    val js = bindingsToJs(List(binding), Set("count"))
+    // Should NOT include computeValue for non-style binding
+    assert(!js.contains("computeValue"))
+  }
+
+  // ==========================================================================
+  // sourceExprToJsGetter tests
+  // ==========================================================================
+
+  test("sourceExprToJsGetter converts Local variable to JS reference") {
+    val local = makeLocal("count")
+    val result = UIAnalyzer.sourceExprToJsGetter(local, Set.empty)
+    assertEquals(result, Some("count"))
+  }
+
+  test("sourceExprToJsGetter converts Local state variable to .value accessor") {
+    val local = makeLocal("count")
+    val result = UIAnalyzer.sourceExprToJsGetter(local, Set("count"))
+    assertEquals(result, Some("count.value"))
+  }
+
+  test("sourceExprToJsGetter converts integer literal") {
+    val lit = makeLiteral(42)
+    val result = UIAnalyzer.sourceExprToJsGetter(lit, Set.empty)
+    assertEquals(result, Some("42"))
+  }
+
+  test("sourceExprToJsGetter converts string literal with proper escaping") {
+    val lit = makeStrLiteral("hello world")
+    val result = UIAnalyzer.sourceExprToJsGetter(lit, Set.empty)
+    assertEquals(result, Some("\"hello world\""))
+  }
+
+  test("sourceExprToJsGetter converts string literal with special characters") {
+    val lit = makeStrLiteral("line1\nline2")
+    val result = UIAnalyzer.sourceExprToJsGetter(lit, Set.empty)
+    assertEquals(result, Some("\"line1\\nline2\""))
+  }
+
+  test("sourceExprToJsGetter converts character literal") {
+    val charLit = TypedExpr.Literal(Lit.Chr("A"), Type.IntType, ())
+    val result = UIAnalyzer.sourceExprToJsGetter(charLit, Set.empty)
+    assertEquals(result, Some("\"A\""))
+  }
+
+  test("sourceExprToJsGetter converts Global reference with package prefix") {
+    val global = makeGlobal("Bosatsu/Math", "sin")
+    val result = UIAnalyzer.sourceExprToJsGetter(global, Set.empty)
+    assertEquals(result, Some("Bosatsu_Math$sin"))
+  }
+
+  test("sourceExprToJsGetter converts Global state reference to .value") {
+    val global = makeGlobal("Demo/State", "count")
+    val result = UIAnalyzer.sourceExprToJsGetter(global, Set("count"))
+    assertEquals(result, Some("Demo_State$count.value"))
+  }
+
+  test("sourceExprToJsGetter converts read(state) to state.value") {
+    val readFn = makeGlobal("Bosatsu/UI", "read")
+    val stateLocal = makeLocal("myState")
+    val readApp = makeApp(readFn, stateLocal)
+
+    val result = UIAnalyzer.sourceExprToJsGetter(readApp, Set.empty)
+    assertEquals(result, Some("myState.value"))
+  }
+
+  test("sourceExprToJsGetter converts function application") {
+    val funcGlobal = makeGlobal("Bosatsu/Math", "add")
+    val arg1 = makeLiteral(1)
+    val arg2 = makeLiteral(2)
+    val app = makeApp(funcGlobal, arg1, arg2)
+
+    val result = UIAnalyzer.sourceExprToJsGetter(app, Set.empty)
+    assertEquals(result, Some("add(1, 2)"))
+  }
+
+  test("sourceExprToJsGetter converts nested function call with state reads") {
+    val funcGlobal = makeGlobal("Bosatsu/UI", "make_transform")
+    val readFn = makeGlobal("Bosatsu/UI", "read")
+    val xLocal = makeLocal("x")
+    val yLocal = makeLocal("y")
+    val readX = makeApp(readFn, xLocal)
+    val readY = makeApp(readFn, yLocal)
+    val app = makeApp(funcGlobal, readX, readY)
+
+    val result = UIAnalyzer.sourceExprToJsGetter(app, Set.empty)
+    assertEquals(result, Some("make_transform(x.value, y.value)"))
+  }
+
+  test("sourceExprToJsGetter unwraps Annotation") {
+    val local = makeLocal("x")
+    val annotated = makeAnnotation(local)
+    val result = UIAnalyzer.sourceExprToJsGetter(annotated, Set("x"))
+    assertEquals(result, Some("x.value"))
+  }
+
+  test("sourceExprToJsGetter unwraps Generic") {
+    val local = makeLocal("x")
+    val generic = makeGeneric(local)
+    val result = UIAnalyzer.sourceExprToJsGetter(generic, Set("x"))
+    assertEquals(result, Some("x.value"))
+  }
+
+  test("sourceExprToJsGetter converts Let binding to IIFE") {
+    val value = makeLiteral(10)
+    val body = makeLocal("tmp")
+    val letExpr = makeLet("tmp", value, body)
+
+    val result = UIAnalyzer.sourceExprToJsGetter(letExpr, Set.empty)
+    // The Let conversion adds the bound name to stateNames for the body,
+    // so "tmp" becomes "tmp.value" in the generated JS
+    assertEquals(result, Some("((tmp) => tmp.value)(10)"))
+  }
+
+  test("sourceExprToJsGetter returns None for lambda expression") {
+    val lambda = makeLambda(List("x"), makeLiteral(0))
+    val result = UIAnalyzer.sourceExprToJsGetter(lambda, Set.empty)
+    assertEquals(result, None)
+  }
+
+  test("sourceExprToJsGetter returns None for match expression") {
+    val matchExpr = makeMatch(makeLiteral(1), List("case" -> makeLiteral(2)))
+    val result = UIAnalyzer.sourceExprToJsGetter(matchExpr, Set.empty)
+    assertEquals(result, None)
+  }
+
+  test("sourceExprToJsGetter returns None for App with unconvertible arg") {
+    val funcGlobal = makeGlobal("Bosatsu/Fn", "apply")
+    val lambda = makeLambda(List("x"), makeLiteral(0))
+    val app = makeApp(funcGlobal, lambda)
+
+    val result = UIAnalyzer.sourceExprToJsGetter(app, Set.empty)
+    assertEquals(result, None)
+  }
+
+  test("sourceExprToJsGetter handles Global with Constructor name") {
+    // Constructor names use Identifier.Constructor, not Identifier.Name
+    val pn = PackageName.parse("Demo/Types").get
+    val consId = Identifier.Constructor("MyType")
+    val global = TypedExpr.Global(pn, consId, Type.IntType, ())
+
+    val result = UIAnalyzer.sourceExprToJsGetter(global, Set.empty)
+    // Constructor names may not convert to Bindable, so falls back to name.asString
+    assert(result.isDefined)
+    assert(result.get.contains("MyType"))
+  }
+
+  // ==========================================================================
+  // BranchCondition additional tests
+  // ==========================================================================
+
+  test("BranchCondition default isTotal is false") {
+    import UIAnalyzer._
+
+    val cond = BranchCondition(List("status"), "Active")
+    assertEquals(cond.isTotal, false)
+  }
+
+  test("BranchCondition with multi-segment discriminant") {
+    import UIAnalyzer._
+
+    val cond = BranchCondition(List("user", "profile", "status"), "Verified", isTotal = false)
+    assertEquals(cond.discriminant, List("user", "profile", "status"))
+    assertEquals(cond.tag, "Verified")
+    assertEquals(cond.isTotal, false)
+  }
+
+  test("BranchCondition with empty discriminant") {
+    import UIAnalyzer._
+
+    val cond = BranchCondition(Nil, "Unknown")
+    assertEquals(cond.discriminant, Nil)
+    assertEquals(cond.tag, "Unknown")
+  }
+
+  // ==========================================================================
+  // DOMProperty.Style parsing round-trip tests
+  // ==========================================================================
+
+  test("DOMProperty.fromString and toJsProperty round-trip for Style") {
+    import UIAnalyzer.DOMProperty._
+
+    val cssProps = List("color", "backgroundColor", "fontSize", "transform", "opacity")
+    cssProps.foreach { css =>
+      val parsed = fromString(s"style.$css")
+      assertEquals(parsed, Some(Style(css)))
+      parsed.foreach { p =>
+        assertEquals(toJsProperty(p), s"style.$css")
+      }
+    }
+  }
+
+  test("DOMProperty.fromString and toJsProperty round-trip for all fixed properties") {
+    import UIAnalyzer.DOMProperty._
+
+    val props = List(
+      ("textContent", TextContent),
+      ("className", ClassName),
+      ("value", Value),
+      ("checked", Checked),
+      ("disabled", Disabled)
+    )
+    props.foreach { case (str, expected) =>
+      assertEquals(fromString(str), Some(expected))
+      assertEquals(toJsProperty(expected), str)
+    }
+  }
+
+  // ==========================================================================
+  // Event handler detection tests - additional event types
+  // ==========================================================================
+
+  test("analyze detects on_keydown handler") {
+    val onKeydownFn = makeGlobal("Bosatsu/UI", "on_keydown")
+    val handler = makeLambda(List("e"), makeLiteral(42))
+    val app = makeApp(onKeydownFn, handler)
+
+    val analysis = UIAnalyzer.analyze(app)
+    assertEquals(analysis.eventHandlers.length, 1)
+    assertEquals(analysis.eventHandlers.head.eventType, "keydown")
+  }
+
+  test("analyze detects on_keyup handler") {
+    val onKeyupFn = makeGlobal("Bosatsu/UI", "on_keyup")
+    val handler = makeLambda(List("e"), makeLiteral(42))
+    val app = makeApp(onKeyupFn, handler)
+
+    val analysis = UIAnalyzer.analyze(app)
+    assertEquals(analysis.eventHandlers.length, 1)
+    assertEquals(analysis.eventHandlers.head.eventType, "keyup")
+  }
+
+  test("analyze detects on_dragstart handler") {
+    val fn = makeGlobal("Bosatsu/UI", "on_dragstart")
+    val handler = makeLambda(List("e"), makeLiteral(42))
+    val app = makeApp(fn, handler)
+
+    val analysis = UIAnalyzer.analyze(app)
+    assertEquals(analysis.eventHandlers.length, 1)
+    assertEquals(analysis.eventHandlers.head.eventType, "dragstart")
+  }
+
+  test("analyze detects on_dragover handler") {
+    val fn = makeGlobal("Bosatsu/UI", "on_dragover")
+    val handler = makeLambda(List("e"), makeLiteral(42))
+    val app = makeApp(fn, handler)
+
+    val analysis = UIAnalyzer.analyze(app)
+    assertEquals(analysis.eventHandlers.length, 1)
+    assertEquals(analysis.eventHandlers.head.eventType, "dragover")
+  }
+
+  test("analyze detects on_drop handler") {
+    val fn = makeGlobal("Bosatsu/UI", "on_drop")
+    val handler = makeLambda(List("e"), makeLiteral(42))
+    val app = makeApp(fn, handler)
+
+    val analysis = UIAnalyzer.analyze(app)
+    assertEquals(analysis.eventHandlers.length, 1)
+    assertEquals(analysis.eventHandlers.head.eventType, "drop")
+  }
+
+  // ==========================================================================
+  // on_frame and canvas_render analysis tests
+  // ==========================================================================
+
+  test("analyze detects on_frame callback") {
+    val onFrameFn = makeGlobal("Bosatsu/UI", "on_frame")
+    val updateFn = makeLambda(List("dt"), makeLiteral(0))
+    val onFrameApp = makeApp(onFrameFn, updateFn)
+
+    val analysis = UIAnalyzer.analyze(onFrameApp)
+    assertEquals(analysis.frameCallbacks.length, 1)
+    assertEquals(analysis.frameCallbacks.head.handler, updateFn)
+  }
+
+  test("analyze detects canvas_render binding") {
+    val canvasRenderFn = makeGlobal("Bosatsu/Canvas", "canvas_render")
+    val stateLocal = makeLocal("canvasState")
+    val renderFn = makeLambda(List("st"), makeLiteral(0))
+    val canvasApp = makeApp(canvasRenderFn, stateLocal, renderFn)
+
+    val canvasState = Identifier.unsafeBindable("canvasState")
+    val analysis = UIAnalyzer.analyzeWithStateBindings(canvasApp, List(canvasState))
+
+    assertEquals(analysis.canvasBindings.length, 1)
+    assertEquals(analysis.canvasBindings.head.statePath, List("canvasState"))
+    assertEquals(analysis.canvasBindings.head.renderFn, renderFn)
+  }
+
+  test("analyze detects canvas_render with short Canvas package name") {
+    val canvasRenderFn = makeGlobal("Canvas", "canvas_render")
+    val stateLocal = makeLocal("st")
+    val renderFn = makeLambda(List("s"), makeLiteral(0))
+    val canvasApp = makeApp(canvasRenderFn, stateLocal, renderFn)
+
+    val st = Identifier.unsafeBindable("st")
+    val analysis = UIAnalyzer.analyzeWithStateBindings(canvasApp, List(st))
+
+    assertEquals(analysis.canvasBindings.length, 1)
+    assertEquals(analysis.canvasBindings.head.statePath, List("st"))
+  }
+
+  test("analyze canvas_render records state read") {
+    val canvasRenderFn = makeGlobal("Bosatsu/Canvas", "canvas_render")
+    val stateLocal = makeLocal("gameState")
+    val renderFn = makeLambda(List("s"), makeLiteral(0))
+    val canvasApp = makeApp(canvasRenderFn, stateLocal, renderFn)
+
+    val gameState = Identifier.unsafeBindable("gameState")
+    val analysis = UIAnalyzer.analyzeWithStateBindings(canvasApp, List(gameState))
+
+    assert(analysis.stateReads.contains(List("gameState")))
+  }
+
+  test("analyze canvas_render with Global state reference") {
+    val canvasRenderFn = makeGlobal("Bosatsu/Canvas", "canvas_render")
+    val stateGlobal = makeGlobal("Demo/Game", "gameState")
+    val renderFn = makeLambda(List("s"), makeLiteral(0))
+    val canvasApp = makeApp(canvasRenderFn, stateGlobal, renderFn)
+
+    val analysis = UIAnalyzer.analyze(canvasApp)
+
+    assertEquals(analysis.canvasBindings.length, 1)
+    assertEquals(analysis.canvasBindings.head.statePath, List("gameState"))
+  }
+
+  test("analyze ignores non-canvas_render Canvas package functions") {
+    val otherFn = makeGlobal("Bosatsu/Canvas", "fill_rect")
+    val app = makeApp(otherFn, makeLiteral(0), makeLiteral(0))
+
+    val analysis = UIAnalyzer.analyze(app)
+    assertEquals(analysis.canvasBindings, Nil)
+    assertEquals(analysis.frameCallbacks, Nil)
+  }
+
+  // ==========================================================================
+  // list_length and list_read state read detection
+  // ==========================================================================
+
+  test("analyze detects list_length(listState) as state read") {
+    val listLengthFn = makeGlobal("Bosatsu/UI", "list_length")
+    val stateLocal = makeLocal("items")
+    val app = makeApp(listLengthFn, stateLocal)
+
+    val analysis = UIAnalyzer.analyze(app)
+    assertEquals(analysis.stateReads, List(List("items")))
+  }
+
+  test("analyze detects list_read(listState) as state read") {
+    val listReadFn = makeGlobal("Bosatsu/UI", "list_read")
+    val stateLocal = makeLocal("items")
+    val app = makeApp(listReadFn, stateLocal)
+
+    val analysis = UIAnalyzer.analyze(app)
+    assertEquals(analysis.stateReads, List(List("items")))
+  }
+
+  test("analyze detects list_length with Global state reference") {
+    val listLengthFn = makeGlobal("Bosatsu/UI", "list_length")
+    val stateGlobal = makeGlobal("Demo/App", "todoItems")
+    val app = makeApp(listLengthFn, stateGlobal)
+
+    val analysis = UIAnalyzer.analyze(app)
+    assertEquals(analysis.stateReads, List(List("todoItems")))
+  }
+
+  test("analyze list_length with non-Local/non-Global argument returns empty") {
+    val listLengthFn = makeGlobal("Bosatsu/UI", "list_length")
+    val innerApp = makeApp(makeGlobal("Some/Pkg", "compute"), makeLiteral(1))
+    val app = makeApp(listLengthFn, innerApp)
+
+    val analysis = UIAnalyzer.analyze(app)
+    assertEquals(analysis.stateReads, Nil)
+  }
+
+  // ==========================================================================
+  // EventBinding field tests
+  // ==========================================================================
+
+  test("EventBinding construction and field access") {
+    import UIAnalyzer._
+
+    val handler = makeLambda(List("e"), makeLiteral(0))
+    val binding = EventBinding[Unit](
+      elementId = "btn-1",
+      eventType = "click",
+      handler = handler,
+      preventDefault = true,
+      stopPropagation = false
+    )
+
+    assertEquals(binding.elementId, "btn-1")
+    assertEquals(binding.eventType, "click")
+    assertEquals(binding.handler, handler)
+    assert(binding.preventDefault)
+    assert(!binding.stopPropagation)
+  }
+
+  // ==========================================================================
+  // Attribute binding extraction tests
+  // ==========================================================================
+
+  test("extractAttributeBindings creates binding for class attribute with state") {
+    val className = Identifier.unsafeBindable("className")
+
+    val consFn = makeGlobal("Bosatsu/List", "NonEmptyList")
+    val tuple2Fn = makeGlobal("Bosatsu/Core", "Tuple2")
+    val classKey = makeStrLiteral("class")
+    val classValue = makeLocal("className")
+    val classTuple = makeApp(tuple2Fn, classKey, classValue)
+
+    val emptyList = makeGlobal("Bosatsu/List", "EmptyList")
+    val props = makeApp(consFn, classTuple, emptyList)
+
+    val hFn = makeGlobal("Bosatsu/UI", "h")
+    val tag = makeStrLiteral("div")
+    val children = makeLiteral(0)
+    val hApp = makeApp(hFn, tag, props, children)
+
+    val analysis = UIAnalyzer.analyzeWithStateBindings(hApp, List(className))
+    assert(analysis.bindings.exists(_.property == UIAnalyzer.DOMProperty.ClassName))
+    assert(analysis.bindings.exists(_.statePath == List("className")))
+  }
+
+  test("extractAttributeBindings creates binding for value attribute with state") {
+    val inputVal = Identifier.unsafeBindable("inputVal")
+
+    val consFn = makeGlobal("Bosatsu/List", "NonEmptyList")
+    val tuple2Fn = makeGlobal("Bosatsu/Core", "Tuple2")
+    val valueKey = makeStrLiteral("value")
+    val valueExpr = makeLocal("inputVal")
+    val valueTuple = makeApp(tuple2Fn, valueKey, valueExpr)
+
+    val emptyList = makeGlobal("Bosatsu/List", "EmptyList")
+    val props = makeApp(consFn, valueTuple, emptyList)
+
+    val hFn = makeGlobal("Bosatsu/UI", "h")
+    val tag = makeStrLiteral("input")
+    val children = makeLiteral(0)
+    val hApp = makeApp(hFn, tag, props, children)
+
+    val analysis = UIAnalyzer.analyzeWithStateBindings(hApp, List(inputVal))
+    assert(analysis.bindings.exists(_.property == UIAnalyzer.DOMProperty.Value))
+  }
+
+  test("extractAttributeBindings creates Style binding for style-* attributes") {
+    val xPos = Identifier.unsafeBindable("xPos")
+
+    val consFn = makeGlobal("Bosatsu/List", "NonEmptyList")
+    val tuple2Fn = makeGlobal("Bosatsu/Core", "Tuple2")
+    val styleKey = makeStrLiteral("style-transform")
+    val styleValue = makeLocal("xPos")
+    val styleTuple = makeApp(tuple2Fn, styleKey, styleValue)
+
+    val emptyList = makeGlobal("Bosatsu/List", "EmptyList")
+    val props = makeApp(consFn, styleTuple, emptyList)
+
+    val hFn = makeGlobal("Bosatsu/UI", "h")
+    val tag = makeStrLiteral("div")
+    val children = makeLiteral(0)
+    val hApp = makeApp(hFn, tag, props, children)
+
+    val analysis = UIAnalyzer.analyzeWithStateBindings(hApp, List(xPos))
+    assert(analysis.bindings.exists(b => b.property == UIAnalyzer.DOMProperty.Style("transform")))
+  }
+
+  test("extractAttributeBindings creates checked binding") {
+    val isChecked = Identifier.unsafeBindable("isChecked")
+
+    val consFn = makeGlobal("Bosatsu/List", "NonEmptyList")
+    val tuple2Fn = makeGlobal("Bosatsu/Core", "Tuple2")
+    val checkedKey = makeStrLiteral("checked")
+    val checkedValue = makeLocal("isChecked")
+    val checkedTuple = makeApp(tuple2Fn, checkedKey, checkedValue)
+
+    val emptyList = makeGlobal("Bosatsu/List", "EmptyList")
+    val props = makeApp(consFn, checkedTuple, emptyList)
+
+    val hFn = makeGlobal("Bosatsu/UI", "h")
+    val tag = makeStrLiteral("input")
+    val children = makeLiteral(0)
+    val hApp = makeApp(hFn, tag, props, children)
+
+    val analysis = UIAnalyzer.analyzeWithStateBindings(hApp, List(isChecked))
+    assert(analysis.bindings.exists(_.property == UIAnalyzer.DOMProperty.Checked))
+  }
+
+  test("extractAttributeBindings creates disabled binding") {
+    val isDisabled = Identifier.unsafeBindable("isDisabled")
+
+    val consFn = makeGlobal("Bosatsu/List", "NonEmptyList")
+    val tuple2Fn = makeGlobal("Bosatsu/Core", "Tuple2")
+    val disabledKey = makeStrLiteral("disabled")
+    val disabledValue = makeLocal("isDisabled")
+    val disabledTuple = makeApp(tuple2Fn, disabledKey, disabledValue)
+
+    val emptyList = makeGlobal("Bosatsu/List", "EmptyList")
+    val props = makeApp(consFn, disabledTuple, emptyList)
+
+    val hFn = makeGlobal("Bosatsu/UI", "h")
+    val tag = makeStrLiteral("button")
+    val children = makeLiteral(0)
+    val hApp = makeApp(hFn, tag, props, children)
+
+    val analysis = UIAnalyzer.analyzeWithStateBindings(hApp, List(isDisabled))
+    assert(analysis.bindings.exists(_.property == UIAnalyzer.DOMProperty.Disabled))
+  }
+
+  test("extractAttributeBindings ignores unsupported attribute names") {
+    val someVal = Identifier.unsafeBindable("someVal")
+
+    val consFn = makeGlobal("Bosatsu/List", "NonEmptyList")
+    val tuple2Fn = makeGlobal("Bosatsu/Core", "Tuple2")
+    val unknownKey = makeStrLiteral("data-custom")
+    val unknownValue = makeLocal("someVal")
+    val unknownTuple = makeApp(tuple2Fn, unknownKey, unknownValue)
+
+    val emptyList = makeGlobal("Bosatsu/List", "EmptyList")
+    val props = makeApp(consFn, unknownTuple, emptyList)
+
+    val hFn = makeGlobal("Bosatsu/UI", "h")
+    val tag = makeStrLiteral("div")
+    val children = makeLiteral(0)
+    val hApp = makeApp(hFn, tag, props, children)
+
+    val analysis = UIAnalyzer.analyzeWithStateBindings(hApp, List(someVal))
+    // data-custom is not a supported DOM property for binding
+    assert(analysis.bindings.isEmpty)
+  }
+
+  test("extractAttributeBindings creates multiple bindings for multi-state expression") {
+    val xPos = Identifier.unsafeBindable("xPos")
+    val yPos = Identifier.unsafeBindable("yPos")
+
+    // Style value depends on both xPos and yPos:
+    // make_transform(read(xPos), read(yPos))
+    val readFn = makeGlobal("Bosatsu/UI", "read")
+    val xLocal = makeLocal("xPos")
+    val yLocal = makeLocal("yPos")
+    val readX = makeApp(readFn, xLocal)
+    val readY = makeApp(readFn, yLocal)
+    val transformFn = makeGlobal("Demo/Transform", "make_transform")
+    val transformApp = makeApp(transformFn, readX, readY)
+
+    val consFn = makeGlobal("Bosatsu/List", "NonEmptyList")
+    val tuple2Fn = makeGlobal("Bosatsu/Core", "Tuple2")
+    val styleKey = makeStrLiteral("style-transform")
+    val styleTuple = makeApp(tuple2Fn, styleKey, transformApp)
+
+    val emptyList = makeGlobal("Bosatsu/List", "EmptyList")
+    val props = makeApp(consFn, styleTuple, emptyList)
+
+    val hFn = makeGlobal("Bosatsu/UI", "h")
+    val tag = makeStrLiteral("div")
+    val children = makeLiteral(0)
+    val hApp = makeApp(hFn, tag, props, children)
+
+    val analysis = UIAnalyzer.analyzeWithStateBindings(hApp, List(xPos, yPos))
+    // Should create one binding per state path
+    val styleBindings = analysis.bindings.filter(_.property == UIAnalyzer.DOMProperty.Style("transform"))
+    assertEquals(styleBindings.length, 2)
+    val paths = styleBindings.map(_.statePath).toSet
+    assert(paths.contains(List("xPos")))
+    assert(paths.contains(List("yPos")))
+  }
+
+  // ==========================================================================
+  // extractStateWrites with IO.flatMap and IO.pure
+  // ==========================================================================
+
+  test("extractStateWrites detects writes inside IO.flatMap") {
+    val count = Identifier.unsafeBindable("count")
+
+    // flatMap(write(count, 1), \x -> write(count, 2))
+    val writeFn = makeGlobal("Bosatsu/UI", "write")
+    val countLocal = makeLocal("count")
+    val write1 = makeApp(writeFn, countLocal, makeLiteral(1))
+    val write2 = makeApp(writeFn, countLocal, makeLiteral(2))
+    val continuation = makeLambda(List("x"), write2)
+
+    val flatMapFn = makeGlobal("Bosatsu/IO", "flatMap")
+    val flatMapApp = makeApp(flatMapFn, write1, continuation)
+    val handler = makeLambda(List("e"), flatMapApp)
+
+    // Checkbox element to trigger extractStateWrites
+    val consFn = makeGlobal("Bosatsu/List", "NonEmptyList")
+    val tuple2Fn = makeGlobal("Bosatsu/Core", "Tuple2")
+    val idTuple = makeApp(tuple2Fn, makeStrLiteral("id"), makeStrLiteral("flatmap-checkbox"))
+    val onClickFn = makeGlobal("Bosatsu/UI", "on_click")
+    val onClickApp = makeApp(onClickFn, handler)
+    val emptyList = makeGlobal("Bosatsu/List", "EmptyList")
+    val props = makeApp(consFn, idTuple, makeApp(consFn, onClickApp, emptyList))
+
+    val hFn = makeGlobal("Bosatsu/UI", "h")
+    val hApp = makeApp(hFn, makeStrLiteral("div"), props, makeLiteral(0))
+
+    val analysis = UIAnalyzer.analyzeWithStateBindings(hApp, List(count))
+    // Should create className bindings since handler writes to state in checkbox
+    assert(analysis.bindings.exists(_.property == UIAnalyzer.DOMProperty.ClassName))
+  }
+
+  test("extractStateWrites with IO.pure returns no state writes") {
+    val count = Identifier.unsafeBindable("count")
+
+    val pureFn = makeGlobal("Bosatsu/IO", "pure")
+    val pureApp = makeApp(pureFn, makeLiteral(42))
+    val handler = makeLambda(List("e"), pureApp)
+
+    val consFn = makeGlobal("Bosatsu/List", "NonEmptyList")
+    val tuple2Fn = makeGlobal("Bosatsu/Core", "Tuple2")
+    val idTuple = makeApp(tuple2Fn, makeStrLiteral("id"), makeStrLiteral("pure-checkbox"))
+    val onClickFn = makeGlobal("Bosatsu/UI", "on_click")
+    val onClickApp = makeApp(onClickFn, handler)
+    val emptyList = makeGlobal("Bosatsu/List", "EmptyList")
+    val props = makeApp(consFn, idTuple, makeApp(consFn, onClickApp, emptyList))
+
+    val hFn = makeGlobal("Bosatsu/UI", "h")
+    val hApp = makeApp(hFn, makeStrLiteral("div"), props, makeLiteral(0))
+
+    val analysis = UIAnalyzer.analyzeWithStateBindings(hApp, List(count))
+    // pure() has no state writes, so no className bindings should be created
+    assert(!analysis.bindings.exists(_.property == UIAnalyzer.DOMProperty.ClassName))
   }
 }

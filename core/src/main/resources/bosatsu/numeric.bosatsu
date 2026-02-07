@@ -1,6 +1,6 @@
 package Bosatsu/Numeric
 
-from Bosatsu/Predef import Int, Comparison, Bool
+from Bosatsu/Predef import Int, Comparison, Bool, Unit, String
 
 # Numeric module with Double type for floating-point arithmetic.
 # Uses symbolic operators (+.), (-.), (*.), (/.) to distinguish from Int ops.
@@ -10,8 +10,15 @@ export (
   Double,
   `+.`, `-.`, `*.`, `/.`,
   from_Int, to_Int,
+  double_to_String, string_to_Double,
   cmp_Double, eq_Double,
-  neg_Double, abs_Double
+  neg_Double, abs_Double,
+  sin, cos, tan,
+  sqrt, pow, exp, log,
+  floor, ceil, round,
+  random, random_range,
+  min_Double, max_Double,
+  pi, e_const
 )
 
 external struct Double
@@ -26,6 +33,12 @@ external def `/.`(a: Double, b: Double) -> Double
 external def from_Int(i: Int) -> Double
 external def to_Int(d: Double) -> Int
 
+# Convert Double to String (for display in UI)
+external def double_to_String(d: Double) -> String
+
+# Parse String to Double (for input handling, returns 0.0 on parse failure)
+external def string_to_Double(s: String) -> Double
+
 # Comparison
 external def cmp_Double(a: Double, b: Double) -> Comparison
 external def eq_Double(a: Double, b: Double) -> Bool
@@ -33,3 +46,34 @@ external def eq_Double(a: Double, b: Double) -> Bool
 # Unary operations
 external def neg_Double(a: Double) -> Double
 external def abs_Double(a: Double) -> Double
+
+# Trigonometric functions
+external def sin(a: Double) -> Double
+external def cos(a: Double) -> Double
+external def tan(a: Double) -> Double
+
+# Power and exponential functions
+external def sqrt(a: Double) -> Double
+external def pow(base: Double, exp: Double) -> Double
+external def exp(a: Double) -> Double
+external def log(a: Double) -> Double
+
+# Rounding functions
+external def floor(a: Double) -> Double
+external def ceil(a: Double) -> Double
+external def round(a: Double) -> Double
+
+# Random number generation (returns a new random Double in [0, 1))
+# Takes Unit to force explicit calling (functional purity marker)
+external def random(u: Unit) -> Double
+
+# Random in range [min, max)
+external def random_range(min: Double, max: Double) -> Double
+
+# Min/max for Doubles
+external def min_Double(a: Double, b: Double) -> Double
+external def max_Double(a: Double, b: Double) -> Double
+
+# Constants
+external pi: Double
+external e_const: Double

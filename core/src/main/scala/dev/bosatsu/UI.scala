@@ -15,6 +15,10 @@ import cats.data.NonEmptyList
   *
   * State[A] is a reactive state container. Reading and writing state
   * is tracked so that bindings can be established at compile time.
+  *
+  * Event handlers return IO[Unit] - the IO structure enables the compiler to
+  * understand effect sequences and optimize DOM/canvas updates accordingly.
+  * The IO monad patterns (flatMap, pure, write) are recognized by UIAnalyzer.
   */
 object UI {
 
@@ -40,6 +44,9 @@ object UI {
 
   /** State container for reactive values */
   case class UIState[A](id: String, var value: A)
+
+  /** List state container for dynamic lists */
+  case class UIListState[A](id: String, var items: List[A])
 
   /** Event handler wrapper */
   case class EventHandler(eventType: String, handler: Value)
@@ -113,7 +120,11 @@ object UI {
         }
       })
       // write(state, value) -> Unit
-      // Note: In JVM, this is a side effect for runtime
+      // JVM implementation: mutates UIState and returns UnitValue directly (not IO-wrapped).
+      // This is by design: JVM externals are for compile-time type checking and evaluation,
+      // not browser runtime. IO semantics (tagged data structures) are only relevant in the
+      // JS runtime where _runIO() interprets them. The JsGen intrinsic generates the proper
+      // {tag: "Write", state, value} IO data structure for the browser.
       .add(packageName, "write", FfiCall.Fn2 { (state, value) =>
         state.asExternal.toAny match {
           case s: UIState[Value @unchecked] => s.value = value
@@ -137,5 +148,68 @@ object UI {
       .add(packageName, "on_change", FfiCall.Fn1 { handler =>
         val handlerId = s"handler_${System.identityHashCode(handler)}"
         ProductValue(Array(Str("data-onchange"), Str(handlerId)))
+      })
+      // list_state(initial) -> ListState[a]
+      .add(packageName, "list_state", FfiCall.Fn1 { initial =>
+        stateCounter += 1
+        val items = VList.unapply(initial).getOrElse(Nil)
+        ExternalValue(UIListState(s"list_state_$stateCounter", items))
+      })
+      // list_read(ls) -> List[a]
+      .add(packageName, "list_read", FfiCall.Fn1 { ls =>
+        ls.asExternal.toAny match {
+          case UIListState(_, items: List[Value] @unchecked) => VList(items)
+          case _ => VList(Nil)
+        }
+      })
+      // list_append(ls, item) -> Unit
+      .add(packageName, "list_append", FfiCall.Fn2 { (ls, item) =>
+        ls.asExternal.toAny match {
+          case s: UIListState[Value @unchecked] => s.items = s.items :+ item
+          case _ => ()
+        }
+        UnitValue
+      })
+      // list_remove_at(ls, index) -> Unit
+      .add(packageName, "list_remove_at", FfiCall.Fn2 { (ls, index) =>
+        ls.asExternal.toAny match {
+          case s: UIListState[Value @unchecked] =>
+            val idx = index match {
+              case VInt(i) => BigInt(i).toInt
+              case _ => -1
+            }
+            if (idx >= 0 && idx < s.items.length) {
+              s.items = s.items.take(idx) ++ s.items.drop(idx + 1)
+            }
+          case _ => ()
+        }
+        UnitValue
+      })
+      // list_update_at(ls, index, item) -> Unit
+      .add(packageName, "list_update_at", FfiCall.Fn3 { (ls, index, item) =>
+        ls.asExternal.toAny match {
+          case s: UIListState[Value @unchecked] =>
+            val idx = index match {
+              case VInt(i) => BigInt(i).toInt
+              case _ => -1
+            }
+            if (idx >= 0 && idx < s.items.length) {
+              s.items = s.items.updated(idx, item)
+            }
+          case _ => ()
+        }
+        UnitValue
+      })
+      // list_length(ls) -> Int
+      .add(packageName, "list_length", FfiCall.Fn1 { ls =>
+        ls.asExternal.toAny match {
+          case UIListState(_, items: List[_]) => VInt(BigInt(items.length))
+          case _ => VInt(BigInt(0))
+        }
+      })
+      // on_frame(update) -> IO[Unit]
+      // Animation frame registration - the actual frame loop runs in the browser
+      .add(packageName, "on_frame", FfiCall.Fn1 { updateFn =>
+        UnitValue
       })
 }

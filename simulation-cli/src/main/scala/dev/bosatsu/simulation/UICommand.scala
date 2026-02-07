@@ -93,15 +93,25 @@ case class UICommand(
 
       _ <- IO(println(s"Found UI binding: $mainName"))
 
-      // 5.5. Scan for state bindings (state(initial) calls)
-      stateBindings <- IO {
+      // 5.5. Scan for state bindings (state(initial) and list_state(initial) calls)
+      allStateBindings <- IO {
         typedPackage.lets.collect {
           case (name, _, expr) if UIAnalyzer.isStateCreationExpr(expr) => name
         }
       }
+      // Separate list states from regular states
+      listStateBindings <- IO {
+        typedPackage.lets.collect {
+          case (name, _, expr) if UIAnalyzer.isListStateCreationExpr(expr) => name
+        }
+      }
+      stateBindings = allStateBindings.filterNot(listStateBindings.contains)
       _ <- IO {
         if (stateBindings.nonEmpty) {
           println(s"Found state variables: ${stateBindings.map(_.asString).mkString(", ")}")
+        }
+        if (listStateBindings.nonEmpty) {
+          println(s"Found list state variables: ${listStateBindings.map(_.asString).mkString(", ")}")
         }
       }
 
@@ -119,12 +129,42 @@ case class UICommand(
       }
 
       // 6. Run UIAnalyzer on the TypedExpr to extract bindings
+      // Include both regular state bindings AND list state bindings so the analyzer
+      // can track dependencies on list operations like list_length
       _ <- IO(println("Analyzing UI bindings..."))
-      analysis = UIAnalyzer.analyzeWithFunctions(mainExpr, stateBindings.toList, functionBodies)
+      allStatesToAnalyze = stateBindings.toList ++ listStateBindings.toList
+      mainAnalysis = UIAnalyzer.analyzeWithFunctions(mainExpr, allStatesToAnalyze, functionBodies)
+
+      // Also scan top-level bindings for on_frame calls (they live outside main)
+      topLevelFrameCallbacks <- IO {
+        typedPackage.lets.flatMap { case (name, _, expr) =>
+          if (name.asString != mainName && !UIAnalyzer.isStateCreationExpr(expr)) {
+            val bindingAnalysis = UIAnalyzer.analyzeWithFunctions(expr, allStatesToAnalyze, functionBodies)
+            bindingAnalysis.frameCallbacks
+          } else Nil
+        }
+      }
+
+      // Collect names of top-level bindings that have IO type
+      // These need to be executed by _runIO at init time
+      ioBindingNames <- IO {
+        typedPackage.lets.collect { case (name, _, expr)
+          if name.asString != mainName && UIAnalyzer.hasIOType(expr) =>
+          name.asString
+        }
+      }
+      _ <- IO(if (ioBindingNames.nonEmpty) println(s"  IO bindings to execute: ${ioBindingNames.mkString(", ")}"))
+
+      // Merge frame callbacks from top-level bindings into main analysis
+      analysis = mainAnalysis.copy(
+        frameCallbacks = mainAnalysis.frameCallbacks ++ topLevelFrameCallbacks
+      )
 
       _ <- IO(println(s"  State reads: ${analysis.stateReads.size}"))
       _ <- IO(println(s"  DOM bindings: ${analysis.bindings.size}"))
       _ <- IO(println(s"  Event handlers: ${analysis.eventHandlers.size}"))
+      _ <- IO(println(s"  Canvas bindings: ${analysis.canvasBindings.size}"))
+      _ <- IO(println(s"  Frame callbacks: ${analysis.frameCallbacks.size}"))
 
       // Print detailed binding info
       _ <- IO {
@@ -139,6 +179,15 @@ case class UICommand(
           analysis.eventHandlers.foreach { h =>
             println(s"    ${h.elementId}: ${h.eventType}")
           }
+        }
+        if (analysis.canvasBindings.nonEmpty) {
+          println("  Canvas bindings:")
+          analysis.canvasBindings.foreach { c =>
+            println(s"    ${c.elementId}: state=${c.statePath.mkString(".")}")
+          }
+        }
+        if (analysis.frameCallbacks.nonEmpty) {
+          println(s"  Frame callbacks: ${analysis.frameCallbacks.size} registered")
         }
       }
 
@@ -168,6 +217,8 @@ case class UICommand(
         analysis,
         config,
         stateBindings.map(_.asString).toList,
+        listStateBindings.map(_.asString).toList,
+        ioBindingNames,
         input.getFileName.toString,
         content
       )
@@ -201,11 +252,15 @@ case class UICommand(
       analysis: UIAnalyzer.UIAnalysis[A],
       config: UIGen.UIConfig,
       stateVarNames: List[String],
+      listStateVarNames: List[String],
+      ioBindingNames: List[String],
       sourceFileName: String,
       sourceContent: String
   ): String = {
     // Generate bindings from UIAnalyzer (automatic detection via handler analysis)
-    val bindingsJs = UIAnalyzer.bindingsToJs(analysis.bindings)
+    // Pass state variable names so computeValue can generate state.value references
+    val allStateNames = (stateVarNames ++ listStateVarNames).toSet
+    val bindingsJs = UIAnalyzer.bindingsToJs(analysis.bindings, allStateNames)
 
     val runtimeJs = generateRuntimeJs()
     val stylesCss = generateStyles(config.theme)
@@ -213,6 +268,30 @@ case class UICommand(
     // Generate code to link state objects to their binding keys
     val stateLinkingCode = stateVarNames.map { name =>
       s"""  if (typeof $name !== 'undefined') _linkStateToBinding($name, "$name");"""
+    }.mkString("\n")
+
+    // Generate code to execute top-level IO bindings (e.g., on_frame registrations)
+    val ioExecutionCode = if (ioBindingNames.isEmpty) "" else {
+      ioBindingNames.map { name =>
+        s"""  if (typeof $name !== 'undefined' && $name && $name.tag) _runIO($name);"""
+      }.mkString("\n")
+    }
+
+    // Generate code to link list state objects to their binding keys and containers
+    val listStateLinkingCode = listStateVarNames.map { name =>
+      s"""  if (typeof $name !== 'undefined') {
+    _linkListStateToBinding($name, "$name");
+    // Find container element with data-list-container="$name"
+    const container = document.querySelector('[data-list-container="$name"]');
+    if (container) {
+      _listContainers[$name.id] = container.id || 'list-container-$name';
+      if (!container.id) container.id = 'list-container-$name';
+      // Store the first child as template (if exists)
+      if (container.firstElementChild) {
+        _listItemTemplates["$name"] = _vnodeFromDomElement(container.firstElementChild);
+      }
+    }
+  }"""
     }.mkString("\n")
 
     s"""<!DOCTYPE html>
@@ -241,6 +320,12 @@ ${JsGen.runtimeCode}
 $runtimeJs
 
 // ============================================================================
+// Canvas Runtime
+// ============================================================================
+
+${generateCanvasRuntimeJs()}
+
+// ============================================================================
 // Binding Map (extracted at compile time)
 // ============================================================================
 
@@ -265,17 +350,28 @@ $stateLinkingCode
 
   if (vnode) {
     const app = document.getElementById('app');
+    // Assign bosatsu IDs to VNode tree before rendering (matches UIAnalyzer DFS order)
+    _assignVNodeIds(vnode);
     app.appendChild(_renderVNode(vnode));
-    console.log('Rendered VNode:', vnode);
   } else {
     console.error('No main or view binding found');
   }
+
+  // Link list state objects to their binding keys and containers
+$listStateLinkingCode
 
   // Initialize element cache for bindings
   _initBindingCache();
 
   // Apply initial state values to DOM (for states that aren't 0/false)
   _applyInitialBindings();
+
+  // Execute top-level IO values (e.g., on_frame registrations)
+$ioExecutionCode
+
+  // Initialize canvas bindings and start animation loop
+  _initCanvasBindings();
+  _startAnimationLoop();
 }
 
 // Apply initial state values to DOM elements
@@ -382,21 +478,58 @@ function _ui_read(stateObj) {
   return stateObj.value;
 }
 
-// Write state and trigger binding updates (called by compiled code)
-function _ui_write(stateObj, value) {
-  const oldValue = stateObj.value;
-  stateObj.value = value;
-
-  // Find bindings using the binding key (Bosatsu variable name)
-  const bindingKey = _stateToBindingKey.get(stateObj);
-  const bindings = bindingKey ? _bindings[bindingKey] : null;
-  if (bindings) {
-    bindings.forEach(binding => {
-      _updateBinding(binding, value);
-    });
+// IO Monad Interpreter - walks IO data structures and performs effects.
+// IO is represented as tagged objects: {tag: "Pure", value: x}, {tag: "Write", state, value}, etc.
+function _runIO(io) {
+  if (!io || typeof io !== 'object' || !io.tag) return undefined;
+  switch (io.tag) {
+    case 'Pure':
+      return io.value;
+    case 'Write': {
+      if (io.state) {
+        io.state.value = io.value;
+        const bindingKey = _stateToBindingKey.get(io.state);
+        const bindings = bindingKey ? _bindings[bindingKey] : null;
+        if (bindings) {
+          bindings.forEach(binding => {
+            _updateBinding(binding, io.value);
+          });
+        }
+        _updateCanvasBindings(io.state);
+      }
+      return undefined;
+    }
+    case 'FlatMap': {
+      const result = _runIO(io.io);
+      const nextIO = io.fn(result);
+      return _runIO(nextIO);
+    }
+    case 'Sequence': {
+      let cur = io.ios;
+      const results = [];
+      while (Array.isArray(cur) && cur[0] === 1) {
+        results.push(_runIO(cur[1]));
+        cur = cur[2];
+      }
+      return results.reduceRight((acc, item) => [1, item, acc], [0]);
+    }
+    case 'Capture':
+      return io.value;
+    case 'CaptureFormula':
+      return io.value;
+    case 'Trace':
+      return '[trace]';
+    case 'RandomInt': {
+      const min = io.min;
+      const max = io.max;
+      return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+    case 'RegisterFrameCallback':
+      _frameCallbacks.push(io.updateFn);
+      return undefined;
+    default:
+      return undefined;
   }
-
-  return []; // Return Unit (empty tuple)
 }
 
 // Register an event handler and return its ID
@@ -408,18 +541,45 @@ function _ui_register_handler(eventType, handler) {
 
 // Update a single DOM binding
 function _updateBinding(binding, value) {
-  let el = _elements[binding.elementId];
-  if (!el) {
-    el = document.getElementById(binding.elementId) ||
-         document.querySelector('[data-bosatsu-id="' + binding.elementId + '"]');
-    if (el) _elements[binding.elementId] = el;
+  try {
+    let el = _elements[binding.elementId];
+    if (!el) {
+      el = document.getElementById(binding.elementId) ||
+           document.querySelector('[data-bosatsu-id="' + binding.elementId + '"]');
+      if (el) _elements[binding.elementId] = el;
   }
   if (!el) return;
 
+  // For bindings with computeValue (e.g., style bindings with multiple dependencies),
+  // call computeValue() to get the actual value instead of using the raw state value
+  if (binding.computeValue) {
+    const computed = binding.computeValue();
+    // The computed result may be a Bosatsu string, convert to JS string
+    const displayValue = Array.isArray(computed)
+      ? _bosatsuStringToJs(computed)
+      : String(computed);
+
+    // Apply to the appropriate property
+    if (binding.property.startsWith('style.')) {
+      const styleProp = binding.property.slice(6);
+      el.style[styleProp] = displayValue;
+    } else {
+      el[binding.property] = displayValue;
+    }
+    return;
+  }
+
   // Check if value is a Bosatsu Bool - [0] for False, [1] for True
-  // Also handle raw integers 0/1 for numeric boolean pattern
-  const isBosatsuBool = Array.isArray(value) && (value[0] === 0 || value[0] === 1) && value.length <= 2;
+  // But be careful: [0] is also an empty Bosatsu string/list!
+  // A true Bosatsu Bool has exactly 1 element. A non-empty string has 3 elements.
+  // We'll check for bools only when length is exactly 1 AND for className bindings.
   const isIntBool = typeof value === 'number' && (value === 0 || value === 1);
+
+  // For arrays, try to detect if it's a string vs a simple bool
+  // Non-empty Bosatsu strings have structure [1, char, rest] with length 3
+  // Empty strings/lists are [0] with length 1 - same as False bool
+  // We'll treat arrays as strings first (safer for textContent), unless it's clearly a bool for className
+  const isBosatsuBool = Array.isArray(value) && value.length === 1 && (value[0] === 0 || value[0] === 1);
   const boolValue = isBosatsuBool ? value[0] === 1 : (isIntBool ? value === 1 : null);
 
   let displayValue;
@@ -429,7 +589,17 @@ function _updateBinding(binding, value) {
     displayValue = Array.isArray(transformResult)
       ? _bosatsuStringToJs(transformResult)
       : String(transformResult);
-  } else if (isBosatsuBool || isIntBool) {
+  } else if (Array.isArray(value)) {
+    // For arrays, convert as Bosatsu string first (handles both strings and lists)
+    // This correctly converts [0] to "" and [1, "a", [1, "b", [0]]] to "ab"
+    const strResult = _bosatsuStringToJs(value);
+    // Only use boolean logic for className with single-element arrays that look like bools
+    if (binding.property === 'className' && isBosatsuBool) {
+      displayValue = boolValue ? 'true' : 'false';
+    } else {
+      displayValue = strResult;
+    }
+  } else if (isIntBool) {
     displayValue = boolValue ? 'true' : 'false';
   } else {
     displayValue = String(value);
@@ -466,6 +636,55 @@ function _updateBinding(binding, value) {
         el.style[styleProp] = displayValue;
       }
   }
+  } catch (e) {
+    console.error('BosatsuUI binding error:', {
+      elementId: binding.elementId,
+      property: binding.property,
+      statePath: binding.statePath,
+      error: e.message
+    });
+  }
+}
+
+// Track which element+eventType combinations have had handlers attached (to avoid duplicates)
+// Key format: "${elementId}:${eventType}" or "${handlerId}" for uniqueness
+const _handlersAttached = new Set();
+
+// Assign data-bosatsu-id to VNode element nodes in DFS order.
+// UIAnalyzer assigns IDs (bosatsu-0, bosatsu-1, ...) by walking h() calls in DFS order.
+// This replicates that walk on the VNode tree, annotating each element-type VNode,
+// then _renderVNode picks up the annotation and sets data-bosatsu-id on the DOM element.
+let _vnodeIdCounter = 0;
+function _assignVNodeIds(vnode) {
+  if (!vnode || typeof vnode !== 'object') return;
+  if (vnode.type === 'element') {
+    // Check if this element has an explicit "id" prop (like canvas with id="simulation")
+    // UIAnalyzer skips freshId() for elements with explicit IDs, so we must too
+    const hasExplicitId = _vnodeHasExplicitId(vnode);
+    if (hasExplicitId) {
+      // Use the explicit id - don't increment counter
+      // (UIAnalyzer uses explicitId.getOrElse(ctx.freshId()))
+    } else {
+      vnode._bosatsuId = 'bosatsu-' + (_vnodeIdCounter++);
+    }
+  }
+  if (vnode.type === 'element' || vnode.type === 'fragment') {
+    if (vnode.children) {
+      const children = _bosatsuListToArray(vnode.children);
+      children.forEach(child => _assignVNodeIds(child));
+    }
+  }
+}
+function _vnodeHasExplicitId(vnode) {
+  if (!vnode.props) return false;
+  const props = _bosatsuListToArray(vnode.props);
+  return props.some(prop => {
+    if (Array.isArray(prop) && prop.length >= 2) {
+      const key = _bosatsuStringToJs(prop[0]) || prop[0];
+      return key === 'id';
+    }
+    return false;
+  });
 }
 
 // Initialize element cache for all bindings
@@ -478,19 +697,45 @@ function _initBindingCache() {
     }
   });
 
-  // Set up event handlers
+  // Set up event handlers (only once per element+eventType combination)
   Object.entries(_handlers).forEach(([handlerId, handler]) => {
+    // Skip if this specific handler has already been processed
+    if (_handlersAttached.has(handlerId)) return;
+    _handlersAttached.add(handlerId);
+
     // Find elements with this handler ID
     const els = document.querySelectorAll('[data-on' + handler.type + '="' + handlerId + '"]');
     els.forEach(el => {
+
       el.addEventListener(handler.type, (e) => {
-        // Call the handler - for click it receives Unit, for input it receives the value
-        if (handler.type === 'click') {
-          handler.fn([]);  // Unit = empty tuple
-        } else if (handler.type === 'input' || handler.type === 'change') {
-          // Convert JS string to Bosatsu string
-          const bsString = _js_to_bosatsu_string(e.target.value);
-          handler.fn(bsString);
+        try {
+          // Call the handler - different events receive different arguments
+          // Handler returns IO[Unit] data structure, which _runIO executes
+          let ioResult;
+          if (handler.type === 'click' || handler.type === 'dragstart') {
+            ioResult = handler.fn([]);  // Unit = empty tuple
+          } else if (handler.type === 'input' || handler.type === 'change') {
+            const bsString = _js_to_bosatsu_string(e.target.value);
+            ioResult = handler.fn(bsString);
+          } else if (handler.type === 'keydown' || handler.type === 'keyup') {
+            const bsKey = _js_to_bosatsu_string(e.key);
+            ioResult = handler.fn(bsKey);
+          } else if (handler.type === 'dragover') {
+            e.preventDefault();
+            ioResult = handler.fn([]);  // Unit
+          } else if (handler.type === 'drop') {
+            e.preventDefault();
+            ioResult = handler.fn([]);  // Unit
+          }
+          // Execute the IO data structure
+          _runIO(ioResult);
+        } catch (err) {
+          console.error('BosatsuUI handler error:', {
+            eventType: handler.type,
+            handlerId: handlerId,
+            error: err.message,
+            stack: err.stack
+          });
         }
       });
     });
@@ -513,6 +758,11 @@ function _renderVNode(vnode) {
     // Tag may be a Bosatsu string (array), convert to JS string
     const tag = _bosatsuStringToJs(vnode.tag) || vnode.tag || 'div';
     const el = document.createElement(tag);
+
+    // Set data-bosatsu-id if assigned by _assignVNodeIds
+    if (vnode._bosatsuId) {
+      el.setAttribute('data-bosatsu-id', vnode._bosatsuId);
+    }
 
     // Process props (array of [key, value] tuples in Bosatsu format)
     if (vnode.props) {
@@ -599,6 +849,346 @@ function _js_to_bosatsu_string(s) {
     result = [1, s[i], result];
   }
   return result;
+}
+
+// Convert JS array to Bosatsu list
+function _js_to_bosatsu_list(arr) {
+  let result = [0]; // Empty list
+  for (let i = arr.length - 1; i >= 0; i--) {
+    result = [1, arr[i], result]; // Cons(head, tail)
+  }
+  return result;
+}
+
+// Convert Bosatsu list to JS array (for canvas commands etc)
+function _bosatsu_list_to_array(list) {
+  const result = [];
+  let current = list;
+  while (Array.isArray(current) && current[0] === 1) {
+    result.push(current[1]);
+    current = current[2];
+  }
+  return result;
+}
+
+// ============================================================================
+// Dynamic List State Management
+// ============================================================================
+
+// List state storage: { id: { id, items: [], templateBindings: {} } }
+const _listState = {};
+let _listStateIdCounter = 0;
+
+// Map list state objects to their binding keys
+const _listStateToBindingKey = new WeakMap();
+
+// Link a list state object to its binding key
+function _linkListStateToBinding(listStateObj, bindingKey) {
+  _listStateToBindingKey.set(listStateObj, bindingKey);
+}
+
+// Create a list state object
+function _ui_create_list_state(initialItems) {
+  const id = 'list_state_' + (_listStateIdCounter++);
+  // Convert Bosatsu list to JS array for internal storage
+  const items = _bosatsuListToArray(initialItems);
+  const listStateObj = {
+    id: id,
+    items: items,
+    templateBindings: {} // Will be populated from _listBindingTemplates
+  };
+  _listState[id] = listStateObj;
+  return listStateObj;
+}
+
+// Read list state - returns current items as Bosatsu list
+function _ui_list_read(listStateObj) {
+  return _js_to_bosatsu_list(listStateObj.items);
+}
+
+// Update bindings that depend on list properties (like list_length)
+// These bindings are registered under the list's bindingKey
+function _updateListDependentBindings(listStateObj) {
+  const bindingKey = _listStateToBindingKey.get(listStateObj);
+  if (!bindingKey) return;
+
+  const bindings = _bindings[bindingKey];
+  if (bindings) {
+    bindings.forEach(binding => {
+      // For list_length bindings, the value is the length
+      // The transform (if any) handles int_to_String conversion
+      _updateBinding(binding, listStateObj.items.length);
+    });
+  }
+}
+
+// Append item to list - registers bindings for new item
+function _ui_list_append(listStateObj, item) {
+  const index = listStateObj.items.length;
+  listStateObj.items.push(item);
+
+  // Register bindings for the new item
+  const bindingKey = _listStateToBindingKey.get(listStateObj);
+  if (bindingKey && _listBindingTemplates[bindingKey]) {
+    _registerListItemBindings(listStateObj, bindingKey, index);
+  }
+
+  // Trigger list re-render (simple approach - re-render container)
+  _renderListItems(listStateObj);
+
+  // Update bindings that depend on list properties (like list_length)
+  _updateListDependentBindings(listStateObj);
+
+  return []; // Unit
+}
+
+// Remove item at index - cleans up bindings
+function _ui_list_remove_at(listStateObj, index) {
+  if (index >= 0 && index < listStateObj.items.length) {
+    listStateObj.items.splice(index, 1);
+
+    // Cleanup bindings for removed item and re-index remaining
+    const bindingKey = _listStateToBindingKey.get(listStateObj);
+    if (bindingKey) {
+      _cleanupListItemBindings(bindingKey, index);
+      _reindexListBindings(bindingKey, index, listStateObj.items.length);
+    }
+
+    // Trigger list re-render
+    _renderListItems(listStateObj);
+
+    // Update bindings that depend on list properties (like list_length)
+    _updateListDependentBindings(listStateObj);
+  }
+
+  return []; // Unit
+}
+
+// Update item at index - triggers binding update
+function _ui_list_update_at(listStateObj, index, item) {
+  if (index >= 0 && index < listStateObj.items.length) {
+    listStateObj.items[index] = item;
+
+    // Trigger bindings for this item
+    const bindingKey = _listStateToBindingKey.get(listStateObj);
+    if (bindingKey) {
+      _updateListItemBindings(bindingKey, index, item);
+    }
+  }
+
+  return []; // Unit
+}
+
+// Template bindings for lists (populated at compile time)
+// Format: { "listName": { "$.field": { property, selectorPattern, transform } } }
+const _listBindingTemplates = {};
+
+// Register bindings for a new list item at given index
+function _registerListItemBindings(listStateObj, bindingKey, index) {
+  const templates = _listBindingTemplates[bindingKey];
+  if (!templates) return;
+
+  Object.entries(templates).forEach(([fieldPattern, template]) => {
+    // Create concrete binding key: "todos.0.completed" from "todos.$.completed"
+    const concreteKey = bindingKey + '.' + index + fieldPattern.substring(1);
+    const selector = template.selectorPattern.replace(/\$/g, String(index));
+
+    if (!_bindings[concreteKey]) {
+      _bindings[concreteKey] = [];
+    }
+    _bindings[concreteKey].push({
+      elementId: selector,
+      property: template.property,
+      transform: template.transform,
+      when: null
+    });
+  });
+}
+
+// Cleanup bindings for a removed list item
+function _cleanupListItemBindings(bindingKey, index) {
+  const prefix = bindingKey + '.' + index;
+  Object.keys(_bindings).forEach(key => {
+    if (key.startsWith(prefix)) {
+      delete _bindings[key];
+    }
+  });
+}
+
+// Re-index bindings after a removal
+function _reindexListBindings(bindingKey, removedIndex, newLength) {
+  // This is a simplified approach - for complex cases we might need
+  // to track the original indices and remap
+  // For now, we rely on re-rendering to fix element IDs
+}
+
+// Update bindings for a specific list item
+function _updateListItemBindings(bindingKey, index, item) {
+  const prefix = bindingKey + '.' + index;
+  Object.entries(_bindings).forEach(([key, bindings]) => {
+    if (key.startsWith(prefix)) {
+      bindings.forEach(binding => {
+        // Extract the field name from the binding key
+        const fieldPath = key.substring(prefix.length + 1);
+        const value = _getFieldValue(item, fieldPath);
+        _updateBinding(binding, value);
+      });
+    }
+  });
+}
+
+// Get a field value from an item (supports nested paths like "name" or "address.city")
+function _getFieldValue(item, fieldPath) {
+  if (!fieldPath) return item;
+  const parts = fieldPath.split('.');
+  let current = item;
+  for (const part of parts) {
+    if (current == null) return null;
+    // Bosatsu structs are arrays: [constructorIndex, field0, field1, ...]
+    if (Array.isArray(current) && !isNaN(parseInt(part))) {
+      current = current[parseInt(part) + 1]; // +1 because index 0 is constructor
+    } else if (typeof current === 'object') {
+      current = current[part];
+    } else {
+      return null;
+    }
+  }
+  return current;
+}
+
+// Container elements for list rendering
+const _listContainers = {};
+
+// Render list items into their container
+function _renderListItems(listStateObj) {
+  const bindingKey = _listStateToBindingKey.get(listStateObj);
+  const containerId = _listContainers[listStateObj.id];
+  if (!containerId) return;
+
+  const container = document.getElementById(containerId) ||
+                    document.querySelector('[data-list-container="' + bindingKey + '"]');
+  if (!container) return;
+
+  // Get the item template (stored during initial render)
+  const template = _listItemTemplates[bindingKey];
+  if (!template) return;
+
+  // Clear and re-render all items
+  container.innerHTML = '';
+  listStateObj.items.forEach((item, index) => {
+    const itemEl = _renderListItem(template, item, index, bindingKey);
+    container.appendChild(itemEl);
+
+    // Cache elements and set up handlers
+    _cacheListItemElements(itemEl, index, bindingKey);
+  });
+
+  // Re-initialize handlers for new elements
+  _initBindingCache();
+}
+
+// Item templates for list rendering (populated from VNode analysis)
+const _listItemTemplates = {};
+
+// Render a single list item from template
+function _renderListItem(template, item, index, listKey) {
+  // Clone the template and fill in item data
+  const vnode = _instantiateTemplate(template, item, index, listKey);
+  return _renderVNode(vnode);
+}
+
+// Instantiate a template with item data
+function _instantiateTemplate(template, item, index, listKey) {
+  if (!template) return { type: 'text', text: String(item) };
+
+  if (template.type === 'text') {
+    // Check if text has a binding (even empty string means "use item directly")
+    if ('binding' in template) {
+      // If binding is empty string, use the item directly; otherwise use field path
+      const value = template.binding === '' ? item : _getFieldValue(item, template.binding);
+      // Convert Bosatsu string to JS string if needed
+      const textValue = Array.isArray(value) ? _bosatsuStringToJs(value) : String(value);
+      return { type: 'text', text: textValue };
+    }
+    return template;
+  }
+
+  if (template.type === 'element') {
+    // Clone props and substitute $INDEX
+    const props = template.props ? _bosatsuListToArray(template.props).map(prop => {
+      if (Array.isArray(prop) && prop.length >= 2) {
+        const key = _bosatsuStringToJs(prop[0]) || prop[0];
+        let value = _bosatsuStringToJs(prop[1]) || prop[1];
+        value = String(value).replace(/\$INDEX/g, String(index));
+        return [key, value];
+      }
+      return prop;
+    }) : [];
+
+    // Recursively instantiate children
+    const children = template.children ?
+      _bosatsuListToArray(template.children).map(child =>
+        _instantiateTemplate(child, item, index, listKey)
+      ) : [];
+
+    return {
+      type: 'element',
+      tag: template.tag,
+      props: _js_to_bosatsu_list(props.map(p => [p[0], p[1]])),
+      children: _js_to_bosatsu_list(children)
+    };
+  }
+
+  return template;
+}
+
+// Cache elements for a rendered list item
+function _cacheListItemElements(itemEl, index, listKey) {
+  // Find all elements with IDs or data-bosatsu-id and cache them
+  const elementsWithId = itemEl.querySelectorAll('[id], [data-bosatsu-id]');
+  elementsWithId.forEach(el => {
+    const id = el.id || el.getAttribute('data-bosatsu-id');
+    if (id) {
+      _elements[id] = el;
+    }
+  });
+}
+
+// Convert a DOM element to a VNode-like template structure
+// Used to capture list item templates from initial render
+function _vnodeFromDomElement(el) {
+  if (el.nodeType === Node.TEXT_NODE) {
+    return { type: 'text', text: el.textContent };
+  }
+
+  if (el.nodeType !== Node.ELEMENT_NODE) {
+    return null;
+  }
+
+  // Extract props from attributes
+  const props = [];
+  for (const attr of el.attributes) {
+    props.push([attr.name, attr.value]);
+  }
+
+  // Mark text content as a binding point (will be replaced with item data)
+  const children = [];
+  for (const child of el.childNodes) {
+    if (child.nodeType === Node.TEXT_NODE && child.textContent.trim()) {
+      // Text nodes become binding points
+      children.push({ type: 'text', text: child.textContent, binding: '' });
+    } else if (child.nodeType === Node.ELEMENT_NODE) {
+      const childVNode = _vnodeFromDomElement(child);
+      if (childVNode) children.push(childVNode);
+    }
+  }
+
+  return {
+    type: 'element',
+    tag: el.tagName.toLowerCase(),
+    props: _js_to_bosatsu_list(props.map(p => [p[0], p[1]])),
+    children: _js_to_bosatsu_list(children)
+  };
 }"""
   }
 
@@ -798,6 +1388,207 @@ p {
       .replace("<", "&lt;")
       .replace(">", "&gt;")
       .replace("\"", "&quot;")
+
+  /**
+   * Generate canvas runtime JavaScript for rendering and animation.
+   */
+  private def generateCanvasRuntimeJs(): String = {
+    """// Canvas bindings: { id: { state, render } }
+const _canvasBindings = {};
+
+// Canvas contexts cache
+const _canvasContexts = {};
+
+// Frame callbacks for animation loop
+const _frameCallbacks = [];
+
+// Last frame timestamp for delta time calculation
+let _lastFrameTime = 0;
+
+// Maximum delta time (33ms = ~30fps) to prevent physics explosions after tab switch
+const MAX_DT = 0.033;
+
+// Register a canvas render binding (called from compiled code)
+function _ui_register_canvas_render(stateObj, renderFn) {
+  const id = '_canvas_' + Object.keys(_canvasBindings).length;
+  _canvasBindings[id] = { state: stateObj, render: renderFn };
+  return id;
+}
+
+// Note: Frame callbacks are registered via _runIO interpreting
+// {tag: "RegisterFrameCallback", updateFn: fn} IO data structures
+
+// Execute canvas commands on a 2D context
+function _executeCanvas(cmds, ctx) {
+  if (!cmds) return;
+
+  // Handle array of commands (from _bosatsu_list_to_array)
+  if (Array.isArray(cmds) && cmds.length > 0 && typeof cmds[0] === 'object' && 'type' in cmds[0]) {
+    cmds.forEach(cmd => _executeCanvas(cmd, ctx));
+    return;
+  }
+
+  // Handle Bosatsu list format
+  if (Array.isArray(cmds) && cmds[0] === 1) {
+    _executeCanvas(cmds[1], ctx);
+    _executeCanvas(cmds[2], ctx);
+    return;
+  }
+
+  // Skip empty list
+  if (Array.isArray(cmds) && cmds[0] === 0) return;
+
+  if (!cmds.type) return;
+
+  switch (cmds.type) {
+    case 'clear':
+      ctx.fillStyle = cmds.color;
+      ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      break;
+
+    case 'fill':
+      ctx.fillStyle = cmds.color;
+      break;
+
+    case 'stroke':
+      ctx.strokeStyle = cmds.color;
+      break;
+
+    case 'lineWidth':
+      ctx.lineWidth = cmds.width;
+      break;
+
+    case 'circle':
+      ctx.beginPath();
+      ctx.arc(cmds.x, cmds.y, cmds.r, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+
+    case 'rect':
+      ctx.fillRect(cmds.x, cmds.y, cmds.w, cmds.h);
+      break;
+
+    case 'line':
+      ctx.beginPath();
+      ctx.moveTo(cmds.x1, cmds.y1);
+      ctx.lineTo(cmds.x2, cmds.y2);
+      ctx.stroke();
+      break;
+
+    case 'text':
+      ctx.fillText(cmds.text, cmds.x, cmds.y);
+      break;
+
+    case 'arc':
+      ctx.beginPath();
+      ctx.arc(cmds.x, cmds.y, cmds.r, cmds.start, cmds.end);
+      ctx.stroke();
+      break;
+
+    case 'save':
+      ctx.save();
+      break;
+
+    case 'restore':
+      ctx.restore();
+      break;
+
+    case 'translate':
+      ctx.translate(cmds.x, cmds.y);
+      break;
+
+    case 'rotate':
+      ctx.rotate(cmds.angle);
+      break;
+
+    case 'scale':
+      ctx.scale(cmds.sx, cmds.sy);
+      break;
+
+    case 'sequence':
+      if (cmds.commands) {
+        cmds.commands.forEach(cmd => _executeCanvas(cmd, ctx));
+      }
+      break;
+  }
+}
+
+// Initialize canvas bindings
+function _initCanvasBindings() {
+  Object.entries(_canvasBindings).forEach(([id, binding]) => {
+    // Find canvas element with this binding
+    const canvas = document.querySelector('[data-canvas-render="' + id + '"]') ||
+                   document.querySelector('canvas[data-bosatsu-id]') ||
+                   document.querySelector('canvas');
+    if (canvas && canvas.getContext) {
+      const ctx = canvas.getContext('2d');
+      _canvasContexts[id] = ctx;
+
+      // Initial render
+      if (binding.state && binding.render) {
+        try {
+          const cmds = binding.render(binding.state.value);
+          _executeCanvas(cmds, ctx);
+        } catch (e) {
+          console.error('Canvas render error:', e);
+        }
+      }
+    }
+  });
+}
+
+// Update all canvas bindings (called when state changes)
+function _updateCanvasBindings(stateObj) {
+  Object.entries(_canvasBindings).forEach(([id, binding]) => {
+    if (binding.state === stateObj || (binding.state && binding.state.id === stateObj.id)) {
+      const ctx = _canvasContexts[id];
+      if (ctx && binding.render) {
+        try {
+          const cmds = binding.render(stateObj.value);
+          _executeCanvas(cmds, ctx);
+        } catch (e) {
+          console.error('Canvas render error:', e);
+        }
+      }
+    }
+  });
+}
+
+// Animation loop
+function _animationLoop(timestamp) {
+  if (_lastFrameTime === 0) {
+    _lastFrameTime = timestamp;
+  }
+
+  // Calculate delta time in seconds, capped to prevent physics explosions
+  let dt = (timestamp - _lastFrameTime) / 1000;
+  dt = Math.min(dt, MAX_DT);
+  _lastFrameTime = timestamp;
+
+  // Call all frame callbacks with delta time, execute resulting IO
+  _frameCallbacks.forEach(callback => {
+    try {
+      const ioResult = callback(dt);
+      _runIO(ioResult);
+    } catch (e) {
+      console.error('Frame callback error:', e);
+    }
+  });
+
+  // Continue the loop
+  if (_frameCallbacks.length > 0) {
+    requestAnimationFrame(_animationLoop);
+  }
+}
+
+// Start the animation loop if there are frame callbacks
+function _startAnimationLoop() {
+  if (_frameCallbacks.length > 0) {
+    _lastFrameTime = 0;
+    requestAnimationFrame(_animationLoop);
+  }
+}"""
+  }
 }
 
 object UICommand {

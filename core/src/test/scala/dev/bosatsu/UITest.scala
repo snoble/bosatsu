@@ -590,10 +590,597 @@ class UITest extends FunSuite {
   // ==========================================================================
 
   test("jvmExternals contains all expected functions") {
-    val expected = List("state", "h", "text", "fragment", "read", "write", "on_click", "on_input", "on_change")
+    val expected = List(
+      "state", "h", "text", "fragment", "read", "write",
+      "on_click", "on_input", "on_change",
+      "list_state", "list_read", "list_append", "list_remove_at",
+      "list_update_at", "list_length", "on_frame"
+    )
     expected.foreach { name =>
       assert(UI.jvmExternals.toMap.contains((UI.packageName, name)), s"Missing external: $name")
     }
+  }
+
+  // ==========================================================================
+  // jvmExternals tests - list_state
+  // ==========================================================================
+
+  test("list_state external creates UIListState from empty list") {
+    val listStateFn = getExternal("list_state") match {
+      case FfiCall.Fn1(f) => f
+      case _ => fail("Expected Fn1"); null
+    }
+
+    val result = listStateFn(VList.VNil)
+
+    result.asExternal.toAny match {
+      case ls: UI.UIListState[?] =>
+        assert(ls.id.startsWith("list_state_"))
+        assertEquals(ls.items, Nil)
+      case _ => fail("Expected UIListState")
+    }
+  }
+
+  test("list_state external creates UIListState from non-empty list") {
+    val listStateFn = getExternal("list_state") match {
+      case FfiCall.Fn1(f) => f
+      case _ => fail("Expected Fn1"); null
+    }
+
+    val initial = VList(List(Value.Str("a"), Value.Str("b"), Value.Str("c")))
+    val result = listStateFn(initial)
+
+    result.asExternal.toAny match {
+      case ls: UI.UIListState[?] =>
+        assert(ls.id.startsWith("list_state_"))
+        assertEquals(ls.items.length, 3)
+      case _ => fail("Expected UIListState")
+    }
+  }
+
+  test("list_state external assigns unique IDs") {
+    val listStateFn = getExternal("list_state") match {
+      case FfiCall.Fn1(f) => f
+      case _ => fail("Expected Fn1"); null
+    }
+
+    val result1 = listStateFn(VList.VNil)
+    val result2 = listStateFn(VList.VNil)
+
+    val id1 = result1.asExternal.toAny.asInstanceOf[UI.UIListState[?]].id
+    val id2 = result2.asExternal.toAny.asInstanceOf[UI.UIListState[?]].id
+    assertNotEquals(id1, id2)
+  }
+
+  test("list_state external handles non-list input") {
+    val listStateFn = getExternal("list_state") match {
+      case FfiCall.Fn1(f) => f
+      case _ => fail("Expected Fn1"); null
+    }
+
+    // VInt is not a list, so VList.unapply returns None, getOrElse yields Nil
+    val result = listStateFn(VInt(42))
+
+    result.asExternal.toAny match {
+      case ls: UI.UIListState[?] =>
+        assertEquals(ls.items, Nil)
+      case _ => fail("Expected UIListState")
+    }
+  }
+
+  // ==========================================================================
+  // jvmExternals tests - list_read
+  // ==========================================================================
+
+  test("list_read external reads items from UIListState") {
+    val listReadFn = getExternal("list_read") match {
+      case FfiCall.Fn1(f) => f
+      case _ => fail("Expected Fn1"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", List(Value.Str("x"), Value.Str("y")))
+    val result = listReadFn(ExternalValue(ls))
+
+    VList.unapply(result) match {
+      case Some(items) =>
+        assertEquals(items.length, 2)
+        assertEquals(items(0), Value.Str("x"))
+        assertEquals(items(1), Value.Str("y"))
+      case None => fail("Expected VList")
+    }
+  }
+
+  test("list_read external returns empty list for empty UIListState") {
+    val listReadFn = getExternal("list_read") match {
+      case FfiCall.Fn1(f) => f
+      case _ => fail("Expected Fn1"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", Nil)
+    val result = listReadFn(ExternalValue(ls))
+
+    VList.unapply(result) match {
+      case Some(items) =>
+        assertEquals(items, Nil)
+      case None => fail("Expected VList")
+    }
+  }
+
+  test("list_read external returns empty list for non-UIListState") {
+    val listReadFn = getExternal("list_read") match {
+      case FfiCall.Fn1(f) => f
+      case _ => fail("Expected Fn1"); null
+    }
+
+    // Pass a plain string instead of a UIListState
+    val result = listReadFn(Value.Str("not a list state"))
+
+    VList.unapply(result) match {
+      case Some(items) =>
+        assertEquals(items, Nil)
+      case None => fail("Expected VList(Nil)")
+    }
+  }
+
+  // ==========================================================================
+  // jvmExternals tests - list_append
+  // ==========================================================================
+
+  test("list_append external appends item to UIListState") {
+    val listAppendFn = getExternal("list_append") match {
+      case FfiCall.Fn2(f) => f
+      case _ => fail("Expected Fn2"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", List(Value.Str("a")))
+    val lsVal = ExternalValue(ls)
+
+    val result = listAppendFn(lsVal, Value.Str("b"))
+
+    assertEquals(result, UnitValue)
+    assertEquals(ls.items.length, 2)
+    assertEquals(ls.items(0), Value.Str("a"))
+    assertEquals(ls.items(1), Value.Str("b"))
+  }
+
+  test("list_append external appends to empty UIListState") {
+    val listAppendFn = getExternal("list_append") match {
+      case FfiCall.Fn2(f) => f
+      case _ => fail("Expected Fn2"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", Nil)
+    val lsVal = ExternalValue(ls)
+
+    val result = listAppendFn(lsVal, Value.Str("first"))
+
+    assertEquals(result, UnitValue)
+    assertEquals(ls.items.length, 1)
+    assertEquals(ls.items.head, Value.Str("first"))
+  }
+
+  test("list_append external handles non-UIListState gracefully") {
+    val listAppendFn = getExternal("list_append") match {
+      case FfiCall.Fn2(f) => f
+      case _ => fail("Expected Fn2"); null
+    }
+
+    val result = listAppendFn(Value.Str("not a list state"), Value.Str("item"))
+    assertEquals(result, UnitValue)
+  }
+
+  // ==========================================================================
+  // jvmExternals tests - list_remove_at
+  // ==========================================================================
+
+  test("list_remove_at external removes item at valid index") {
+    val listRemoveAtFn = getExternal("list_remove_at") match {
+      case FfiCall.Fn2(f) => f
+      case _ => fail("Expected Fn2"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", List(Value.Str("a"), Value.Str("b"), Value.Str("c")))
+    val lsVal = ExternalValue(ls)
+
+    val result = listRemoveAtFn(lsVal, VInt(1))
+
+    assertEquals(result, UnitValue)
+    assertEquals(ls.items.length, 2)
+    assertEquals(ls.items(0), Value.Str("a"))
+    assertEquals(ls.items(1), Value.Str("c"))
+  }
+
+  test("list_remove_at external removes first item") {
+    val listRemoveAtFn = getExternal("list_remove_at") match {
+      case FfiCall.Fn2(f) => f
+      case _ => fail("Expected Fn2"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", List(Value.Str("a"), Value.Str("b")))
+    val lsVal = ExternalValue(ls)
+
+    val result = listRemoveAtFn(lsVal, VInt(0))
+
+    assertEquals(result, UnitValue)
+    assertEquals(ls.items.length, 1)
+    assertEquals(ls.items(0), Value.Str("b"))
+  }
+
+  test("list_remove_at external removes last item") {
+    val listRemoveAtFn = getExternal("list_remove_at") match {
+      case FfiCall.Fn2(f) => f
+      case _ => fail("Expected Fn2"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", List(Value.Str("a"), Value.Str("b")))
+    val lsVal = ExternalValue(ls)
+
+    val result = listRemoveAtFn(lsVal, VInt(1))
+
+    assertEquals(result, UnitValue)
+    assertEquals(ls.items.length, 1)
+    assertEquals(ls.items(0), Value.Str("a"))
+  }
+
+  test("list_remove_at external ignores negative index") {
+    val listRemoveAtFn = getExternal("list_remove_at") match {
+      case FfiCall.Fn2(f) => f
+      case _ => fail("Expected Fn2"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", List(Value.Str("a"), Value.Str("b")))
+    val lsVal = ExternalValue(ls)
+
+    val result = listRemoveAtFn(lsVal, VInt(-1))
+
+    assertEquals(result, UnitValue)
+    // List should be unchanged
+    assertEquals(ls.items.length, 2)
+  }
+
+  test("list_remove_at external ignores out-of-bounds index") {
+    val listRemoveAtFn = getExternal("list_remove_at") match {
+      case FfiCall.Fn2(f) => f
+      case _ => fail("Expected Fn2"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", List(Value.Str("a")))
+    val lsVal = ExternalValue(ls)
+
+    val result = listRemoveAtFn(lsVal, VInt(5))
+
+    assertEquals(result, UnitValue)
+    // List should be unchanged
+    assertEquals(ls.items.length, 1)
+  }
+
+  test("list_remove_at external ignores non-integer index") {
+    val listRemoveAtFn = getExternal("list_remove_at") match {
+      case FfiCall.Fn2(f) => f
+      case _ => fail("Expected Fn2"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", List(Value.Str("a"), Value.Str("b")))
+    val lsVal = ExternalValue(ls)
+
+    val result = listRemoveAtFn(lsVal, Value.Str("not an int"))
+
+    assertEquals(result, UnitValue)
+    // List should be unchanged
+    assertEquals(ls.items.length, 2)
+  }
+
+  test("list_remove_at external handles non-UIListState gracefully") {
+    val listRemoveAtFn = getExternal("list_remove_at") match {
+      case FfiCall.Fn2(f) => f
+      case _ => fail("Expected Fn2"); null
+    }
+
+    val result = listRemoveAtFn(Value.Str("not a list state"), VInt(0))
+    assertEquals(result, UnitValue)
+  }
+
+  // ==========================================================================
+  // jvmExternals tests - list_update_at
+  // ==========================================================================
+
+  test("list_update_at external updates item at valid index") {
+    val listUpdateAtFn = getExternal("list_update_at") match {
+      case FfiCall.Fn3(f) => f
+      case _ => fail("Expected Fn3"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", List(Value.Str("a"), Value.Str("b"), Value.Str("c")))
+    val lsVal = ExternalValue(ls)
+
+    val result = listUpdateAtFn(lsVal, VInt(1), Value.Str("B"))
+
+    assertEquals(result, UnitValue)
+    assertEquals(ls.items.length, 3)
+    assertEquals(ls.items(0), Value.Str("a"))
+    assertEquals(ls.items(1), Value.Str("B"))
+    assertEquals(ls.items(2), Value.Str("c"))
+  }
+
+  test("list_update_at external updates first item") {
+    val listUpdateAtFn = getExternal("list_update_at") match {
+      case FfiCall.Fn3(f) => f
+      case _ => fail("Expected Fn3"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", List(Value.Str("old"), Value.Str("keep")))
+    val lsVal = ExternalValue(ls)
+
+    val result = listUpdateAtFn(lsVal, VInt(0), Value.Str("new"))
+
+    assertEquals(result, UnitValue)
+    assertEquals(ls.items(0), Value.Str("new"))
+    assertEquals(ls.items(1), Value.Str("keep"))
+  }
+
+  test("list_update_at external updates last item") {
+    val listUpdateAtFn = getExternal("list_update_at") match {
+      case FfiCall.Fn3(f) => f
+      case _ => fail("Expected Fn3"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", List(Value.Str("keep"), Value.Str("old")))
+    val lsVal = ExternalValue(ls)
+
+    val result = listUpdateAtFn(lsVal, VInt(1), Value.Str("new"))
+
+    assertEquals(result, UnitValue)
+    assertEquals(ls.items(0), Value.Str("keep"))
+    assertEquals(ls.items(1), Value.Str("new"))
+  }
+
+  test("list_update_at external ignores negative index") {
+    val listUpdateAtFn = getExternal("list_update_at") match {
+      case FfiCall.Fn3(f) => f
+      case _ => fail("Expected Fn3"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", List(Value.Str("a")))
+    val lsVal = ExternalValue(ls)
+
+    val result = listUpdateAtFn(lsVal, VInt(-1), Value.Str("x"))
+
+    assertEquals(result, UnitValue)
+    // List should be unchanged
+    assertEquals(ls.items, List(Value.Str("a")))
+  }
+
+  test("list_update_at external ignores out-of-bounds index") {
+    val listUpdateAtFn = getExternal("list_update_at") match {
+      case FfiCall.Fn3(f) => f
+      case _ => fail("Expected Fn3"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", List(Value.Str("a")))
+    val lsVal = ExternalValue(ls)
+
+    val result = listUpdateAtFn(lsVal, VInt(10), Value.Str("x"))
+
+    assertEquals(result, UnitValue)
+    // List should be unchanged
+    assertEquals(ls.items, List(Value.Str("a")))
+  }
+
+  test("list_update_at external ignores non-integer index") {
+    val listUpdateAtFn = getExternal("list_update_at") match {
+      case FfiCall.Fn3(f) => f
+      case _ => fail("Expected Fn3"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", List(Value.Str("a"), Value.Str("b")))
+    val lsVal = ExternalValue(ls)
+
+    val result = listUpdateAtFn(lsVal, Value.Str("not an int"), Value.Str("x"))
+
+    assertEquals(result, UnitValue)
+    // List should be unchanged
+    assertEquals(ls.items, List(Value.Str("a"), Value.Str("b")))
+  }
+
+  test("list_update_at external handles non-UIListState gracefully") {
+    val listUpdateAtFn = getExternal("list_update_at") match {
+      case FfiCall.Fn3(f) => f
+      case _ => fail("Expected Fn3"); null
+    }
+
+    val result = listUpdateAtFn(Value.Str("not a list state"), VInt(0), Value.Str("x"))
+    assertEquals(result, UnitValue)
+  }
+
+  // ==========================================================================
+  // jvmExternals tests - list_length
+  // ==========================================================================
+
+  test("list_length external returns length of UIListState") {
+    val listLengthFn = getExternal("list_length") match {
+      case FfiCall.Fn1(f) => f
+      case _ => fail("Expected Fn1"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", List(Value.Str("a"), Value.Str("b"), Value.Str("c")))
+    val result = listLengthFn(ExternalValue(ls))
+
+    result match {
+      case VInt(n) => assertEquals(BigInt(n), BigInt(3))
+      case _ => fail("Expected VInt")
+    }
+  }
+
+  test("list_length external returns 0 for empty UIListState") {
+    val listLengthFn = getExternal("list_length") match {
+      case FfiCall.Fn1(f) => f
+      case _ => fail("Expected Fn1"); null
+    }
+
+    val ls = UI.UIListState[Value]("test_ls", Nil)
+    val result = listLengthFn(ExternalValue(ls))
+
+    result match {
+      case VInt(n) => assertEquals(BigInt(n), BigInt(0))
+      case _ => fail("Expected VInt")
+    }
+  }
+
+  test("list_length external returns 0 for non-UIListState") {
+    val listLengthFn = getExternal("list_length") match {
+      case FfiCall.Fn1(f) => f
+      case _ => fail("Expected Fn1"); null
+    }
+
+    val result = listLengthFn(Value.Str("not a list state"))
+
+    result match {
+      case VInt(n) => assertEquals(BigInt(n), BigInt(0))
+      case _ => fail("Expected VInt")
+    }
+  }
+
+  // ==========================================================================
+  // jvmExternals tests - on_frame
+  // ==========================================================================
+
+  test("on_frame external returns UnitValue") {
+    val onFrameFn = getExternal("on_frame") match {
+      case FfiCall.Fn1(f) => f
+      case _ => fail("Expected Fn1"); null
+    }
+
+    val handler = UnitValue
+    val result = onFrameFn(handler)
+
+    assertEquals(result, UnitValue)
+  }
+
+  test("on_frame external accepts any handler value") {
+    val onFrameFn = getExternal("on_frame") match {
+      case FfiCall.Fn1(f) => f
+      case _ => fail("Expected Fn1"); null
+    }
+
+    // Try with a string value
+    val result1 = onFrameFn(Value.Str("some_handler"))
+    assertEquals(result1, UnitValue)
+
+    // Try with an integer value
+    val result2 = onFrameFn(VInt(42))
+    assertEquals(result2, UnitValue)
+  }
+
+  // ==========================================================================
+  // Integration: list operations work together
+  // ==========================================================================
+
+  test("list operations work together: create, append, read, length") {
+    val listStateFn = getExternal("list_state") match {
+      case FfiCall.Fn1(f) => f
+      case _ => fail("Expected Fn1"); null
+    }
+    val listAppendFn = getExternal("list_append") match {
+      case FfiCall.Fn2(f) => f
+      case _ => fail("Expected Fn2"); null
+    }
+    val listReadFn = getExternal("list_read") match {
+      case FfiCall.Fn1(f) => f
+      case _ => fail("Expected Fn1"); null
+    }
+    val listLengthFn = getExternal("list_length") match {
+      case FfiCall.Fn1(f) => f
+      case _ => fail("Expected Fn1"); null
+    }
+
+    // Create empty list state
+    val lsVal = listStateFn(VList.VNil)
+
+    // Append three items
+    listAppendFn(lsVal, Value.Str("first"))
+    listAppendFn(lsVal, Value.Str("second"))
+    listAppendFn(lsVal, Value.Str("third"))
+
+    // Read and verify
+    val readResult = listReadFn(lsVal)
+    VList.unapply(readResult) match {
+      case Some(items) =>
+        assertEquals(items.length, 3)
+        assertEquals(items(0), Value.Str("first"))
+        assertEquals(items(1), Value.Str("second"))
+        assertEquals(items(2), Value.Str("third"))
+      case None => fail("Expected VList")
+    }
+
+    // Check length
+    val lengthResult = listLengthFn(lsVal)
+    lengthResult match {
+      case VInt(n) => assertEquals(BigInt(n), BigInt(3))
+      case _ => fail("Expected VInt")
+    }
+  }
+
+  test("list operations work together: create, append, remove, update") {
+    val listStateFn = getExternal("list_state") match {
+      case FfiCall.Fn1(f) => f
+      case _ => fail("Expected Fn1"); null
+    }
+    val listAppendFn = getExternal("list_append") match {
+      case FfiCall.Fn2(f) => f
+      case _ => fail("Expected Fn2"); null
+    }
+    val listRemoveAtFn = getExternal("list_remove_at") match {
+      case FfiCall.Fn2(f) => f
+      case _ => fail("Expected Fn2"); null
+    }
+    val listUpdateAtFn = getExternal("list_update_at") match {
+      case FfiCall.Fn3(f) => f
+      case _ => fail("Expected Fn3"); null
+    }
+    val listReadFn = getExternal("list_read") match {
+      case FfiCall.Fn1(f) => f
+      case _ => fail("Expected Fn1"); null
+    }
+
+    // Create with initial items
+    val initial = VList(List(Value.Str("a"), Value.Str("b"), Value.Str("c")))
+    val lsVal = listStateFn(initial)
+
+    // Remove middle item -> ["a", "c"]
+    listRemoveAtFn(lsVal, VInt(1))
+
+    // Update first item -> ["A", "c"]
+    listUpdateAtFn(lsVal, VInt(0), Value.Str("A"))
+
+    // Append new item -> ["A", "c", "d"]
+    listAppendFn(lsVal, Value.Str("d"))
+
+    // Read and verify final state
+    val readResult = listReadFn(lsVal)
+    VList.unapply(readResult) match {
+      case Some(items) =>
+        assertEquals(items.length, 3)
+        assertEquals(items(0), Value.Str("A"))
+        assertEquals(items(1), Value.Str("c"))
+        assertEquals(items(2), Value.Str("d"))
+      case None => fail("Expected VList")
+    }
+  }
+
+  // ==========================================================================
+  // UIListState direct tests
+  // ==========================================================================
+
+  test("UIListState holds initial items") {
+    val ls = UI.UIListState("test_id", List("a", "b"))
+    assertEquals(ls.id, "test_id")
+    assertEquals(ls.items, List("a", "b"))
+  }
+
+  test("UIListState items is mutable") {
+    val ls = UI.UIListState("test_id", List("a"))
+    ls.items = List("x", "y", "z")
+    assertEquals(ls.items, List("x", "y", "z"))
   }
 
   // ==========================================================================
