@@ -3351,6 +3351,13 @@ g = y -> choose(id(y), y)
       case _ => true
     })
 
+    val letCoverage = TypedExprNormalization.provenanceCoverageReport(
+      artifacts,
+      _ => None
+    )
+    assert(letCoverage.coveredNodeCount > 0)
+    assert(letCoverage.coveredNodeCount + letCoverage.uncoveredNodeCount > 0)
+
     val programArtifacts =
       TypedExprNormalization.normalizeProgramWithArtifacts(
         TestUtils.testPackage,
@@ -3366,6 +3373,11 @@ g = y -> choose(id(y), y)
     assertEquals(fromProgramNormalized, Some(fullNormalizedExpr))
     assertEquals(programArtifacts.preInliningRoots, artifacts.preInliningRoots)
     assertEquals(programArtifacts.normalizedRoots, artifacts.normalizedRoots)
+
+    val programCoverage = programArtifacts.coverageReport
+    assert(programCoverage.coveredNodeCount > 0)
+    assert(programCoverage.coveredRegions.nonEmpty)
+    assert(programCoverage.summaryLine.contains("provenance coverage"))
   }
 
   test("if matches normalizes to same code as equivalent match") {

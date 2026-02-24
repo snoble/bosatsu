@@ -51,6 +51,50 @@ object NormalizationProvenance {
 
       nodes.keysIterator.forall(visit)
     }
+
+    def ancestorsInclusive(roots: Iterable[ProvenanceId]): Set[ProvenanceId] = {
+      val seen = mutable.HashSet.empty[ProvenanceId]
+
+      def visit(id: ProvenanceId): Unit =
+        if (seen.add(id)) {
+          nodes.get(id).foreach { node =>
+            node.parents.foreach(visit)
+          }
+        }
+
+      roots.iterator.foreach(visit)
+      seen.toSet
+    }
+  }
+
+  final case class CoverageReport(
+      coveredNodeCount: Int,
+      uncoveredNodeCount: Int,
+      coveredRegions: Set[Region],
+      uncoveredRegions: Set[Region]
+  ) {
+    def summaryLine: String =
+      s"provenance coverage: $coveredNodeCount covered nodes, $uncoveredNodeCount uncovered nodes"
+  }
+
+  def coverageFromRoots[A](
+      dag: Dag[A],
+      roots: Iterable[ProvenanceId],
+      regionOf: A => Option[Region]
+  ): CoverageReport = {
+    val covered = dag.ancestorsInclusive(roots)
+    val all = dag.nodes.keySet
+    val uncovered = all -- covered
+
+    def regions(ids: Set[ProvenanceId]): Set[Region] =
+      ids.iterator.flatMap(id => dag.nodes.get(id).flatMap(n => regionOf(n.tag))).toSet
+
+    CoverageReport(
+      coveredNodeCount = covered.size,
+      uncoveredNodeCount = uncovered.size,
+      coveredRegions = regions(covered),
+      uncoveredRegions = regions(uncovered)
+    )
   }
 
   final class Builder[A] private () {
