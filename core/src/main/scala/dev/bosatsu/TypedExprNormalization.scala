@@ -337,6 +337,151 @@ object TypedExprNormalization {
     Program(typeEnv, normalLets, extDefs, stmts)
   }
 
+  private def simplifyMatch[A: Eq, V](
+      namerec: Option[Bindable],
+      m: TypedExpr[A],
+      scope: Scope[A],
+      typeEnv: TypeEnv[V]
+  )(implicit ev: V <:< Kind.Arg): Option[TypedExpr[A]] =
+    m match {
+      case Match(_, NonEmptyList(Branch(p, None, e), Nil), _)
+          if !e.freeVarsDup.exists(p.names.toSet) =>
+        // match x:
+        //   foo: fn
+        //
+        // where foo has no names can become just fn
+        normalize1(namerec, e, scope, typeEnv)
+      case Match(
+            arg,
+            NonEmptyList(Branch(Pattern.SinglyNamed(y), None, e), Nil),
+            tag
+          ) =>
+        // match x:
+        //   y: fn
+        // let y = x in fn
+        normalize1(
+          namerec,
+          Let(y, arg, e, RecursionKind.NonRecursive, tag),
+          scope,
+          typeEnv
+        )
+      case Match(arg, branches, tag) =>
+        def ncount(
+            shadows: Iterable[Bindable],
+            e: TypedExpr[A]
+        ): (Int, TypedExpr[A]) =
+          // the final result of the branch is what is assigned to the name
+          normalizeLetOpt(None, e, scope -- shadows, typeEnv) match {
+            case None    => (0, e)
+            case Some(e) => (1, e)
+          }
+
+        case class BranchNorm(changed: Int, branch: Branch[A], dropped: Boolean)
+
+        // normalize guards in pattern scope, fold True/False guards,
+        // then normalize bodies and remove unused pattern binders.
+        val branchNorms =
+          branches.map { branch =>
+            val p = branch.pattern
+            val shadowed = p.names.toSet
+            val branchScope = scope -- shadowed
+
+            val guardNorm0 =
+              branch.guard.map(normalize1(None, _, branchScope, typeEnv).get)
+            val (guardChanged, guard1, dropped) =
+              guardNorm0 match {
+                case Some(g1) =>
+                  boolConst(g1) match {
+                    case Some(true) =>
+                      // `if True` is equivalent to an unguarded branch.
+                      (1, None, false)
+                    case Some(false) =>
+                      // Keep metadata for safety fallback, but mark as dropped.
+                      (1, Some(g1), true)
+                    case None =>
+                      val changed = if (branch.guard.exists(_ eq g1)) 0 else 1
+                      (changed, Some(g1), false)
+                  }
+                case None =>
+                  (0, None, false)
+              }
+
+            if (dropped)
+              BranchNorm(guardChanged, branch.copy(guard = guard1), true)
+            else {
+              val (exprChanged, expr1) = ncount(shadowed, branch.expr)
+              val freeT1 =
+                expr1.freeVarsDup.toSet ++
+                  guard1.fold(Set.empty[Bindable])(_.freeVarsDup.toSet)
+              // we don't need to keep any variables that aren't free
+              // TODO: we can still replace total matches with _
+              // such as Foo(_, _, _) for structs or unions that are total
+              val p1 = p.filterVars(freeT1)
+              val patChanged = if (p1 == p) 0 else 1
+              BranchNorm(
+                guardChanged + exprChanged + patChanged,
+                Branch(p1, guard1, expr1),
+                false
+              )
+            }
+          }
+
+        val changed0 = branchNorms.foldLeft(0) { case (acc, bn) =>
+          acc + bn.changed
+        }
+        val keptBranches = branchNorms.toList.collect {
+          case BranchNorm(_, b, false) =>
+            b
+        }
+        val branches1 =
+          NonEmptyList
+            .fromList(keptBranches)
+            .getOrElse(NonEmptyList.one(branchNorms.last.branch))
+
+        // due to total matches, the last branch without any bindings
+        // can always be rewritten as _
+        val (changed1, branches1a) =
+          branches1.last.pattern match {
+            case Pattern.WildCard =>
+              (changed0, branches1)
+            case notWild
+                if notWild.names.isEmpty && branches1.last.guard.isEmpty =>
+              val newb = branches1.init ::: (Branch(
+                Pattern.WildCard,
+                None,
+                branches1.last.expr
+              ) :: Nil)
+              // this newb list clearly has more than 0 elements
+              (changed0 + 1, NonEmptyList.fromListUnsafe(newb))
+            case _ =>
+              (changed0, branches1)
+          }
+        val a1 = normalize1(None, arg, scope, typeEnv).get
+        if (changed1 == 0) {
+          val m1 = Match(a1, branches, tag)
+          Impl.maybeEvalMatch(m1, scope) match {
+            case None =>
+              // if only the arg changes, there
+              // is no need to rerun the normalization
+              // because normalization of branches
+              // does not depend on the arg
+              if (a1 eq arg) None
+              else Some(m1)
+            case Some(m2) =>
+              // TODO: we may not have a proof that m2 is smaller
+              // than m1. requiring m2.size < m1.size fails some tests
+              // we can possibly simplify this now:
+              normalize1(namerec, m2, scope, typeEnv)
+          }
+        } else {
+          // there has been some change, so
+          // see if that unlocked any new changes
+          normalize1(namerec, Match(a1, branches1a, tag), scope, typeEnv)
+        }
+      case _ =>
+        None
+    }
+
   // if you have made one step of progress, use this to recurse
   // so we don't throw away if we don't progress more
   private def normalize1[A: Eq, V](
@@ -1321,141 +1466,8 @@ object TypedExprNormalization {
         val recur1 = Recur(args1, tpe, tag)
         if ((recur1: TypedExpr[A]) === te) None
         else Some(recur1)
-
-      case Match(_, NonEmptyList(Branch(p, None, e), Nil), _)
-          if !e.freeVarsDup.exists(p.names.toSet) =>
-        // match x:
-        //   foo: fn
-        //
-        // where foo has no names can become just fn
-        normalize1(namerec, e, scope, typeEnv)
-      case Match(
-            arg,
-            NonEmptyList(Branch(Pattern.SinglyNamed(y), None, e), Nil),
-            tag
-          ) =>
-        // match x:
-        //   y: fn
-        // let y = x in fn
-        normalize1(
-          namerec,
-          Let(y, arg, e, RecursionKind.NonRecursive, tag),
-          scope,
-          typeEnv
-        )
-      case Match(arg, branches, tag) =>
-        def ncount(
-            shadows: Iterable[Bindable],
-            e: TypedExpr[A]
-        ): (Int, TypedExpr[A]) =
-          // the final result of the branch is what is assigned to the name
-          normalizeLetOpt(None, e, scope -- shadows, typeEnv) match {
-            case None    => (0, e)
-            case Some(e) => (1, e)
-          }
-
-        case class BranchNorm(changed: Int, branch: Branch[A], dropped: Boolean)
-
-        // normalize guards in pattern scope, fold True/False guards,
-        // then normalize bodies and remove unused pattern binders.
-        val branchNorms =
-          branches.map { branch =>
-            val p = branch.pattern
-            val shadowed = p.names.toSet
-            val branchScope = scope -- shadowed
-
-            val guardNorm0 =
-              branch.guard.map(normalize1(None, _, branchScope, typeEnv).get)
-            val (guardChanged, guard1, dropped) =
-              guardNorm0 match {
-                case Some(g1) =>
-                  boolConst(g1) match {
-                    case Some(true) =>
-                      // `if True` is equivalent to an unguarded branch.
-                      (1, None, false)
-                    case Some(false) =>
-                      // Keep metadata for safety fallback, but mark as dropped.
-                      (1, Some(g1), true)
-                    case None =>
-                      val changed = if (branch.guard.exists(_ eq g1)) 0 else 1
-                      (changed, Some(g1), false)
-                  }
-                case None =>
-                  (0, None, false)
-              }
-
-            if (dropped)
-              BranchNorm(guardChanged, branch.copy(guard = guard1), true)
-            else {
-              val (exprChanged, expr1) = ncount(shadowed, branch.expr)
-              val freeT1 =
-                expr1.freeVarsDup.toSet ++
-                  guard1.fold(Set.empty[Bindable])(_.freeVarsDup.toSet)
-              // we don't need to keep any variables that aren't free
-              // TODO: we can still replace total matches with _
-              // such as Foo(_, _, _) for structs or unions that are total
-              val p1 = p.filterVars(freeT1)
-              val patChanged = if (p1 == p) 0 else 1
-              BranchNorm(
-                guardChanged + exprChanged + patChanged,
-                Branch(p1, guard1, expr1),
-                false
-              )
-            }
-          }
-
-        val changed0 = branchNorms.foldLeft(0) { case (acc, bn) =>
-          acc + bn.changed
-        }
-        val keptBranches = branchNorms.toList.collect {
-          case BranchNorm(_, b, false) =>
-            b
-        }
-        val branches1 =
-          NonEmptyList
-            .fromList(keptBranches)
-            .getOrElse(NonEmptyList.one(branchNorms.last.branch))
-
-        // due to total matches, the last branch without any bindings
-        // can always be rewritten as _
-        val (changed1, branches1a) =
-          branches1.last.pattern match {
-            case Pattern.WildCard =>
-              (changed0, branches1)
-            case notWild
-                if notWild.names.isEmpty && branches1.last.guard.isEmpty =>
-              val newb = branches1.init ::: (Branch(
-                Pattern.WildCard,
-                None,
-                branches1.last.expr
-              ) :: Nil)
-              // this newb list clearly has more than 0 elements
-              (changed0 + 1, NonEmptyList.fromListUnsafe(newb))
-            case _ =>
-              (changed0, branches1)
-          }
-        val a1 = normalize1(None, arg, scope, typeEnv).get
-        if (changed1 == 0) {
-          val m1 = Match(a1, branches, tag)
-          Impl.maybeEvalMatch(m1, scope) match {
-            case None =>
-              // if only the arg changes, there
-              // is no need to rerun the normalization
-              // because normalization of branches
-              // does not depend on the arg
-              if (a1 eq arg) None
-              else Some(m1)
-            case Some(m2) =>
-              // TODO: we may not have a proof that m2 is smaller
-              // than m1. requiring m2.size < m1.size fails some tests
-              // we can possibly simplify this now:
-              normalize1(namerec, m2, scope, typeEnv)
-          }
-        } else {
-          // there has been some change, so
-          // see if that unlocked any new changes
-          normalize1(namerec, Match(a1, branches1a, tag), scope, typeEnv)
-        }
+      case m @ Match(_, _, _) =>
+        simplifyMatch(namerec, m, scope, typeEnv)
     }
   }
 
