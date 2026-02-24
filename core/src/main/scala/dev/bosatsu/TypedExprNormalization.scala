@@ -339,23 +339,21 @@ object TypedExprNormalization {
 
   private def simplifyMatch[A: Eq, V](
       namerec: Option[Bindable],
-      m: TypedExpr[A],
+      arg: TypedExpr[A],
+      branches: NonEmptyList[Branch[A]],
+      tag: A,
       scope: Scope[A],
       typeEnv: TypeEnv[V]
   )(implicit ev: V <:< Kind.Arg): Option[TypedExpr[A]] =
-    m match {
-      case Match(_, NonEmptyList(Branch(p, None, e), Nil), _)
+    branches match {
+      case NonEmptyList(Branch(p, None, e), Nil)
           if !e.freeVarsDup.exists(p.names.toSet) =>
         // match x:
         //   foo: fn
         //
         // where foo has no names can become just fn
         normalize1(namerec, e, scope, typeEnv)
-      case Match(
-            arg,
-            NonEmptyList(Branch(Pattern.SinglyNamed(y), None, e), Nil),
-            tag
-          ) =>
+      case NonEmptyList(Branch(Pattern.SinglyNamed(y), None, e), Nil) =>
         // match x:
         //   y: fn
         // let y = x in fn
@@ -365,7 +363,7 @@ object TypedExprNormalization {
           scope,
           typeEnv
         )
-      case Match(arg, branches, tag) =>
+      case _ =>
         def ncount(
             shadows: Iterable[Bindable],
             e: TypedExpr[A]
@@ -478,8 +476,6 @@ object TypedExprNormalization {
           // see if that unlocked any new changes
           normalize1(namerec, Match(a1, branches1a, tag), scope, typeEnv)
         }
-      case _ =>
-        None
     }
 
   // if you have made one step of progress, use this to recurse
@@ -1466,8 +1462,8 @@ object TypedExprNormalization {
         val recur1 = Recur(args1, tpe, tag)
         if ((recur1: TypedExpr[A]) === te) None
         else Some(recur1)
-      case m @ Match(_, _, _) =>
-        simplifyMatch(namerec, m, scope, typeEnv)
+      case Match(arg, branches, tag) =>
+        simplifyMatch(namerec, arg, branches, tag, scope, typeEnv)
     }
   }
 
