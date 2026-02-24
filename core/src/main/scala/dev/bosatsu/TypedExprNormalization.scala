@@ -531,6 +531,44 @@ object TypedExprNormalization {
     }
   }
 
+  private def inlineLetBinding[A: Eq, V](
+      namerec: Option[Bindable],
+      arg: Bindable,
+      ex2: TypedExpr[A],
+      in1: TypedExpr[A],
+      rec1: RecursionKind,
+      tag: A,
+      original: TypedExpr[A],
+      scope: Scope[A],
+      typeEnv: TypeEnv[V]
+  )(implicit ev: V <:< Kind.Arg): Option[TypedExpr[A]] = {
+    val cnt = in1.freeVarsDup.count(_ == arg)
+    if (cnt > 0) {
+      // the arg is needed
+      val isSimp = Impl.isSimple(ex2, lambdaSimple = true)
+      val shouldInline = (!rec1.isRecursive) && {
+        (cnt == 1) || isSimp
+      }
+      // we don't want to inline a value that is itself a function call
+      // inside of lambdas
+      val inlined =
+        if (shouldInline)
+          substitute(arg, ex2, in1, enterLambda = isSimp)
+        else None
+      inlined match {
+        case Some(il) =>
+          normalize1(namerec, il, scope, typeEnv)
+        case None =>
+          val step = Let(arg, ex2, in1, rec1, tag)
+          if ((step: TypedExpr[A]) === original) None
+          else normalize1(namerec, step, scope, typeEnv)
+      }
+    } else {
+      // let x = y in z if x isn't free in z = z
+      Some(in1)
+    }
+  }
+
   // if you have made one step of progress, use this to recurse
   // so we don't throw away if we don't progress more
   private def normalize1[A: Eq, V](
@@ -1345,31 +1383,17 @@ object TypedExprNormalization {
                       }
                       normalize1(namerec, Match(marg, b1, mtag), scope, typeEnv)
                     case _ =>
-                      val cnt = in1.freeVarsDup.count(_ == arg)
-                      if (cnt > 0) {
-                        // the arg is needed
-                        val isSimp = Impl.isSimple(ex2, lambdaSimple = true)
-                        val shouldInline = (!rec1.isRecursive) && {
-                          (cnt == 1) || isSimp
-                        }
-                        // we don't want to inline a value that is itself a function call
-                        // inside of lambdas
-                        val inlined =
-                          if (shouldInline)
-                            substitute(arg, ex2, in1, enterLambda = isSimp)
-                          else None
-                        inlined match {
-                          case Some(il) =>
-                            normalize1(namerec, il, scope, typeEnv)
-                          case None =>
-                            val step = Let(arg, ex2, in1, rec1, tag)
-                            if ((step: TypedExpr[A]) === te) None
-                            else normalize1(namerec, step, scope, typeEnv)
-                        }
-                      } else {
-                        // let x = y in z if x isn't free in z = z
-                        Some(in1)
-                      }
+                      inlineLetBinding(
+                        namerec = namerec,
+                        arg = arg,
+                        ex2 = ex2,
+                        in1 = in1,
+                        rec1 = rec1,
+                        tag = tag,
+                        original = te,
+                        scope = scope,
+                        typeEnv = typeEnv
+                      )
                   }
               }
           }
