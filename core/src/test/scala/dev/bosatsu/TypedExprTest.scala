@@ -1135,6 +1135,23 @@ main = match Some(1):
     }
   }
 
+  test("normalization is idempotent on TypedExpr") {
+    forAll { (a: Int, b: Int, pivot: Int) =>
+      val src =
+        s"""x = $a
+           |y = $b
+           |z = if x matches $pivot: y
+           |else: x
+           |out = z
+           |""".stripMargin
+      checkLast(src) { te =>
+        val once = TypedExprNormalization.normalize(te).getOrElse(te)
+        val twice = TypedExprNormalization.normalize(once).getOrElse(once)
+        assertEquals(twice.void, once.void, s"${once.repr} != ${twice.repr}")
+      }
+    }
+  }
+
   test("normalization can inline a tail-recursive function via Loop") {
     val fName = Identifier.Name("f")
     val xName = Identifier.Name("x")
