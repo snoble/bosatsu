@@ -382,6 +382,15 @@ object TypedExprNormalization {
     val provenanceBuilder = NormalizationProvenance.Builder.empty[A]
     val preInliningRoots = provenanceBuilder.rootsFor(preInlining)
     val normalizedRoots = provenanceBuilder.rootsFor(normalized)
+    val preByName = preInlining.iterator.map { case (n, _, te) => (n, te) }.toMap
+    normalized.foreach { case (name, _, te1) =>
+      preByName.get(name).foreach { te0 =>
+        if (te0 =!= te1) {
+          val op = classifyRewrite(te0, te1)
+          val _ = provenanceBuilder.derive(op, te1, te0 :: Nil)
+        }
+      }
+    }
     LetNormalizationArtifacts(
       preInlining = preInlining,
       normalized = normalized,
@@ -389,6 +398,69 @@ object TypedExprNormalization {
       preInliningRoots = preInliningRoots,
       normalizedRoots = normalizedRoots
     )
+  }
+
+  private def hasNode[A](te: TypedExpr[A])(
+      pred: PartialFunction[TypedExpr[A], Boolean]
+  ): Boolean =
+    if (pred.isDefinedAt(te) && pred(te)) true
+    else
+      te match {
+        case Generic(_, in) =>
+          hasNode(in)(pred)
+        case Annotation(in, _, _) =>
+          hasNode(in)(pred)
+        case AnnotatedLambda(_, in, _) =>
+          hasNode(in)(pred)
+        case App(fn, args, _, _) =>
+          hasNode(fn)(pred) || args.exists(hasNode(_)(pred))
+        case Let(_, expr, in, _, _) =>
+          hasNode(expr)(pred) || hasNode(in)(pred)
+        case Loop(args, body, _) =>
+          args.exists { case (_, initExpr) =>
+            hasNode(initExpr)(pred)
+          } || hasNode(body)(pred)
+        case Recur(args, _, _) =>
+          args.exists(hasNode(_)(pred))
+        case Match(arg, branches, _) =>
+          hasNode(arg)(pred) || branches.exists { case Branch(_, guard, branchExpr) =>
+            guard.exists(hasNode(_)(pred)) || hasNode(branchExpr)(pred)
+          }
+        case Local(_, _, _) | Global(_, _, _, _) | Literal(_, _, _) =>
+          false
+      }
+
+  private def classifyRewrite[A](
+      before: TypedExpr[A],
+      after: TypedExpr[A]
+  ): NormalizationProvenance.Operation = {
+    import NormalizationProvenance.Operation
+
+    val beforeHasApp = hasNode(before) { case App(_, _, _, _) => true }
+    val afterHasApp = hasNode(after) { case App(_, _, _, _) => true }
+    val beforeHasLet = hasNode(before) { case Let(_, _, _, _, _) => true }
+    val afterHasLet = hasNode(after) { case Let(_, _, _, _, _) => true }
+    val beforeRecursiveLet = hasNode(before) {
+      case Let(_, _, _, rec, _) if rec.isRecursive => true
+    }
+    val afterRecursiveLet = hasNode(after) {
+      case Let(_, _, _, rec, _) if rec.isRecursive => true
+    }
+    val beforeHasMatch = hasNode(before) { case Match(_, _, _) => true }
+    val afterHasMatch = hasNode(after) { case Match(_, _, _) => true }
+    val beforeHasLoop = hasNode(before) { case Loop(_, _, _) | Recur(_, _, _) => true }
+    val afterHasLoop = hasNode(after) { case Loop(_, _, _) | Recur(_, _, _) => true }
+    val beforeSize = before.size
+    val afterSize = after.size
+
+    if (beforeHasApp && !afterHasApp) Operation.CallSiteInline
+    else if (beforeHasLet && !afterHasLet) Operation.LetInline
+    else if (beforeHasMatch && !afterHasMatch) Operation.MatchRewrite
+    else if (beforeRecursiveLet && afterRecursiveLet && (afterSize != beforeSize))
+      Operation.ClosureRewrite
+    else if (!beforeHasLoop && afterHasLoop) Operation.TailRecRewrite
+    else if (beforeHasLoop || afterHasLoop) Operation.LoopRewrite
+    else Operation.NormalizeStep
   }
 
   def normalizeProgram[A, V](
