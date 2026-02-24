@@ -3288,6 +3288,58 @@ x = Foo
     (unoptimizedExpr, normalizedExpr)
   }
 
+  test("normalizeStructuralOnly preserves call sites while full normalize inlines") {
+    val stmts = Parser.unsafeParse(
+      Statement.parser,
+      """
+id = x -> x
+choose = (x, y) -> match y:
+  case _: x
+g = y -> choose(id(y), y)
+"""
+    )
+    val (fullTypeEnv, unoptProgram) =
+      Package.inferBodyUnopt(TestUtils.testPackage, Nil, stmts) match {
+        case cats.data.Ior.Right(res) =>
+          res
+        case cats.data.Ior.Both(errs, _) =>
+          fail(s"inference failure:\n${errs.toList.mkString("\n")}")
+        case cats.data.Ior.Left(errs) =>
+          fail(s"inference failure:\n${errs.toList.mkString("\n")}")
+      }
+
+    val g = Identifier.Name("g")
+
+    val fullNormalizedExpr =
+      TypedExprNormalization
+        .normalizeAll(TestUtils.testPackage, unoptProgram.lets, fullTypeEnv)
+        .find(_._1 == g) match {
+        case Some((_, _, te)) => te
+        case None =>
+          fail("missing let g in fully normalized lets")
+      }
+
+    val structuralNormalizedExpr =
+      TypedExprNormalization
+        .normalizeStructuralOnly(TestUtils.testPackage, fullTypeEnv, unoptProgram)
+        .lets
+        .find(_._1 == g) match {
+        case Some((_, _, te)) => te
+        case None =>
+          fail("missing let g in structural-only normalized lets")
+      }
+
+    val fullAppCount = count(fullNormalizedExpr) {
+      case TypedExpr.App(_, _, _, _) => true
+    }
+    val structuralAppCount = count(structuralNormalizedExpr) {
+      case TypedExpr.App(_, _, _, _) => true
+    }
+
+    assertEquals(fullAppCount, 0)
+    assert(structuralAppCount > 0)
+  }
+
   test("if matches normalizes to same code as equivalent match") {
     def normalizedFromPackage(packSrc: String): TypedExpr[Unit] =
       Par.withEC {
