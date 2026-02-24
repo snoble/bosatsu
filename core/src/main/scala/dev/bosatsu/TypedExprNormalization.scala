@@ -307,6 +307,11 @@ object TypedExprNormalization {
     }
   }
 
+  final case class LetNormalizationArtifacts[A](
+      preInlining: List[(Bindable, RecursionKind, TypedExpr[A])],
+      normalized: List[(Bindable, RecursionKind, TypedExpr[A])]
+  )
+
   private def normalizeAllWithMode[A: Eq, V](
       pack: PackageName,
       lets: List[(Bindable, RecursionKind, TypedExpr[A])],
@@ -352,6 +357,19 @@ object TypedExprNormalization {
   ): List[(Bindable, RecursionKind, TypedExpr[A])] =
     normalizeAllWithMode(pack, lets, typeEnv, NormalizationMode.Full)
 
+  def normalizeAllWithArtifacts[A: Eq, V](
+      pack: PackageName,
+      lets: List[(Bindable, RecursionKind, TypedExpr[A])],
+      typeEnv: TypeEnv[V]
+  )(implicit
+      ev: V <:< Kind.Arg
+  ): LetNormalizationArtifacts[A] = {
+    val preInlining =
+      normalizeAllWithMode(pack, lets, typeEnv, NormalizationMode.StructuralOnly)
+    val normalized = normalizeAllWithMode(pack, lets, typeEnv, NormalizationMode.Full)
+    LetNormalizationArtifacts(preInlining = preInlining, normalized = normalized)
+  }
+
   def normalizeProgram[A, V](
       p: PackageName,
       fullTypeEnv: TypeEnv[V],
@@ -375,6 +393,23 @@ object TypedExprNormalization {
     val normalLets =
       normalizeAllWithMode(p, lets, fullTypeEnv, NormalizationMode.StructuralOnly)
     Program(typeEnv, normalLets, extDefs, stmts)
+  }
+
+  def normalizeProgramWithArtifacts[A, V](
+      p: PackageName,
+      fullTypeEnv: TypeEnv[V],
+      prog: Program[TypeEnv[V], TypedExpr[Declaration], A]
+  )(implicit
+      ev: V <:< Kind.Arg
+  ): (
+      Program[TypeEnv[V], TypedExpr[Declaration], A],
+      Program[TypeEnv[V], TypedExpr[Declaration], A]
+  ) = {
+    val Program(typeEnv, lets, extDefs, stmts) = prog
+    val artifacts = normalizeAllWithArtifacts(p, lets, fullTypeEnv)
+    val preInlining = Program(typeEnv, artifacts.preInlining, extDefs, stmts)
+    val normalized = Program(typeEnv, artifacts.normalized, extDefs, stmts)
+    (preInlining, normalized)
   }
 
   private def simplifyMatch[A: Eq, V](
