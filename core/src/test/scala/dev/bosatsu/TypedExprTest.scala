@@ -3338,12 +3338,14 @@ g = y -> choose(id(y), y)
     assertEquals(fullAppCount, 0)
     assert(structuralAppCount > 0)
 
-    val (preInliningProgram, normalizedProgram) =
+    val programArtifacts =
       TypedExprNormalization.normalizeProgramWithArtifacts(
         TestUtils.testPackage,
         fullTypeEnv,
         unoptProgram
       )
+    val preInliningProgram = programArtifacts.preInlining
+    val normalizedProgram = programArtifacts.normalized
 
     val fromProgramPreInlining = preInliningProgram.lets.find(_._1 == g).map(_._3)
     val fromProgramNormalized = normalizedProgram.lets.find(_._1 == g).map(_._3)
@@ -3457,8 +3459,8 @@ enum L[a]: E, NE(head: a, tail: L[a])
 
 x = (
   def go(y, z):
-    def loop(z1):
-      recur z1:
+    def loop(z):
+      recur z:
         case E: y
         case NE(_, t): loop(t)
 
