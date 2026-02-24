@@ -478,6 +478,59 @@ object TypedExprNormalization {
         }
     }
 
+  private def inlineCallSite[A: Eq, V](
+      namerec: Option[Bindable],
+      fn: TypedExpr[A],
+      args: NonEmptyList[TypedExpr[A]],
+      tpe0: Type,
+      tag: A,
+      scope: Scope[A],
+      typeEnv: TypeEnv[V]
+  )(implicit ev: V <:< Kind.Arg): Option[TypedExpr[A]] = {
+    val tpe = Type.normalize(tpe0)
+    val f1 = normalize1(None, fn, scope, typeEnv).get
+    // the second and third branches use this but the first doesn't
+    // make it lazy so we don't recurse more than needed
+    lazy val a1 = ListUtil.mapConserveNel(args) { a =>
+      normalize1(None, a, scope, typeEnv).get
+    }
+    val ws = Impl.WithScope(scope, ev.substituteCo[TypeEnv](typeEnv))
+
+    f1 match {
+      // TODO: what if f1: Generic(_, AnnotatedLambda(_, _, _))
+      // we should still be able ton convert this to a let by
+      // instantiating to the right args
+      case ws.ResolveToLambda(Nil, args1, body, ftag) =>
+        val lam = AnnotatedLambda(args1, body, ftag)
+        val l = appLambda[A](lam, args, tpe, tag)
+        normalize1(namerec, l, scope, typeEnv)
+      case lam @ AnnotatedLambda(_, _, _) =>
+        val l = appLambda[A](lam, args, tpe, tag)
+        normalize1(namerec, l, scope, typeEnv)
+      case Let(arg1, ex, in, rec, tag1) if a1.forall(_.notFree(arg1)) =>
+        // (app (let x y z) w) == (let x y (app z w)) if w does not have x free
+        normalize1(
+          namerec,
+          Let(arg1, ex, App(in, args, tpe, tag), rec, tag1),
+          scope,
+          typeEnv
+        )
+      case Global(pack, n: Bindable, _, _) =>
+        ws.ResolveToLambda.resolveGlobalCallWithBonus(pack, n, args) match {
+          case Some((args1, body, ftag)) =>
+            val lam = AnnotatedLambda(args1, body, ftag)
+            val l = appLambda[A](lam, args, tpe, tag)
+            normalize1(namerec, l, scope, typeEnv)
+          case None =>
+            if ((f1 eq fn) && (tpe == tpe0) && (a1 eq args)) None
+            else Some(App(f1, a1, tpe, tag))
+        }
+      case _ =>
+        if ((f1 eq fn) && (tpe == tpe0) && (a1 eq args)) None
+        else Some(App(f1, a1, tpe, tag))
+    }
+  }
+
   // if you have made one step of progress, use this to recurse
   // so we don't throw away if we don't progress more
   private def normalize1[A: Eq, V](
@@ -1197,48 +1250,7 @@ object TypedExprNormalization {
         Some(optTE)
       // TODO: we could implement much of the predef at compile time
       case App(fn, args, tpe0, tag) =>
-        val tpe = Type.normalize(tpe0)
-        val f1 = normalize1(None, fn, scope, typeEnv).get
-        // the second and third branches use this but the first doesn't
-        // make it lazy so we don't recurse more than needed
-        lazy val a1 = ListUtil.mapConserveNel(args) { a =>
-          normalize1(None, a, scope, typeEnv).get
-        }
-        val ws = Impl.WithScope(scope, ev.substituteCo[TypeEnv](typeEnv))
-
-        f1 match {
-          // TODO: what if f1: Generic(_, AnnotatedLambda(_, _, _))
-          // we should still be able ton convert this to a let by
-          // instantiating to the right args
-          case ws.ResolveToLambda(Nil, args1, body, ftag) =>
-            val lam = AnnotatedLambda(args1, body, ftag)
-            val l = appLambda[A](lam, args, tpe, tag)
-            normalize1(namerec, l, scope, typeEnv)
-          case lam @ AnnotatedLambda(_, _, _) =>
-            val l = appLambda[A](lam, args, tpe, tag)
-            normalize1(namerec, l, scope, typeEnv)
-          case Let(arg1, ex, in, rec, tag1) if a1.forall(_.notFree(arg1)) =>
-            // (app (let x y z) w) == (let x y (app z w)) if w does not have x free
-            normalize1(
-              namerec,
-              Let(arg1, ex, App(in, args, tpe, tag), rec, tag1),
-              scope,
-              typeEnv
-            )
-          case Global(pack, n: Bindable, _, _) =>
-            ws.ResolveToLambda.resolveGlobalCallWithBonus(pack, n, args) match {
-              case Some((args1, body, ftag)) =>
-                val lam = AnnotatedLambda(args1, body, ftag)
-                val l = appLambda[A](lam, args, tpe, tag)
-                normalize1(namerec, l, scope, typeEnv)
-              case None =>
-                if ((f1 eq fn) && (tpe == tpe0) && (a1 eq args)) None
-                else Some(App(f1, a1, tpe, tag))
-            }
-          case _ =>
-            if ((f1 eq fn) && (tpe == tpe0) && (a1 eq args)) None
-            else Some(App(f1, a1, tpe, tag))
-        }
+        inlineCallSite(namerec, fn, args, tpe0, tag, scope, typeEnv)
       case Let(arg, ex, in, rec, tag) =>
         // note, Infer has already checked
         // to make sure rec is accurate
