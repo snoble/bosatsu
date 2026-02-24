@@ -7,7 +7,7 @@ object NormalizationProvenance {
 
   final case class ProvenanceId(value: Long) extends AnyVal
 
-  enum Operation {
+  enum Operation derives CanEqual {
     case Original
     case NormalizeStep
     case CallSiteInline
@@ -26,7 +26,32 @@ object NormalizationProvenance {
       parents: List[ProvenanceId]
   )
 
-  final case class Dag[A](nodes: Map[ProvenanceId, Node[A]])
+  final case class Dag[A](nodes: Map[ProvenanceId, Node[A]]) {
+    def parentsExist: Boolean =
+      nodes.valuesIterator.forall { node =>
+        node.parents.forall(nodes.contains)
+      }
+
+    def isAcyclic: Boolean = {
+      val temp = mutable.HashSet.empty[ProvenanceId]
+      val perm = mutable.HashSet.empty[ProvenanceId]
+
+      def visit(id: ProvenanceId): Boolean =
+        if (perm(id)) true
+        else if (temp(id)) false
+        else {
+          val _ = temp.add(id)
+          val ok = nodes.get(id).forall(_.parents.forall(visit))
+          val _ = temp.remove(id)
+          if (ok) {
+            val _ = perm.add(id)
+          }
+          ok
+        }
+
+      nodes.keysIterator.forall(visit)
+    }
+  }
 
   final class Builder[A] private () {
     private val ids =

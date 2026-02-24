@@ -3317,16 +3317,16 @@ g = y -> choose(id(y), y)
     )
 
     val fullNormalizedExpr = artifacts.normalized.find(_._1 == g) match {
-        case Some((_, _, te)) => te
-        case None =>
-          fail("missing let g in fully normalized lets")
-      }
+      case Some((_, _, te)) => te
+      case None =>
+        fail("missing let g in fully normalized lets")
+    }
 
     val structuralNormalizedExpr = artifacts.preInlining.find(_._1 == g) match {
-        case Some((_, _, te)) => te
-        case None =>
-          fail("missing let g in structural-only normalized lets")
-      }
+      case Some((_, _, te)) => te
+      case None =>
+        fail("missing let g in structural-only normalized lets")
+    }
 
     val fullAppCount = count(fullNormalizedExpr) {
       case TypedExpr.App(_, _, _, _) => true
@@ -3337,6 +3337,19 @@ g = y -> choose(id(y), y)
 
     assertEquals(fullAppCount, 0)
     assert(structuralAppCount > 0)
+
+    val preRoot = artifacts.preInliningRoots.getOrElse(g, fail("missing pre root"))
+    val normalizedRoot = artifacts.normalizedRoots.getOrElse(g, fail("missing normalized root"))
+    val normalizedNode =
+      artifacts.provenance.nodes.getOrElse(normalizedRoot, fail("missing normalized node"))
+
+    assert(artifacts.provenance.parentsExist)
+    assert(artifacts.provenance.isAcyclic)
+    assert(normalizedNode.parents.contains(preRoot))
+    assert(normalizedNode.op match {
+      case NormalizationProvenance.Operation.Original => false
+      case _ => true
+    })
 
     val programArtifacts =
       TypedExprNormalization.normalizeProgramWithArtifacts(
@@ -3351,6 +3364,8 @@ g = y -> choose(id(y), y)
     val fromProgramNormalized = normalizedProgram.lets.find(_._1 == g).map(_._3)
     assertEquals(fromProgramPreInlining, Some(structuralNormalizedExpr))
     assertEquals(fromProgramNormalized, Some(fullNormalizedExpr))
+    assertEquals(programArtifacts.preInliningRoots, artifacts.preInliningRoots)
+    assertEquals(programArtifacts.normalizedRoots, artifacts.normalizedRoots)
   }
 
   test("if matches normalizes to same code as equivalent match") {

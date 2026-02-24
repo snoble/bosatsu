@@ -87,10 +87,22 @@ class TypedExprNormalizationCharTest extends munit.FunSuite {
 
     val expected =
       """count [NonRecursive] = (generic
-        |    forall a: *. Test::L[a] -> Bosatsu/Predef::Int
-        |    (lambda [z Test::L[a]] (loop [a (var z Test::L[a])] (match (var a Test::L[a])
-        |                    [E, (lit 0 Bosatsu/Predef::Int)]
-        |                    [NE(_, t: Test::L[a]), (recur (var t Test::L[a]) Bosatsu/Predef::Int)]))))
+        |    forall b: *. Test::L[b] -> Bosatsu/Predef::Int
+        |    (lambda
+        |        [z Test::L[b]]
+        |        (letrec
+        |            loop
+        |            (generic
+        |                forall a: *. Test::L[a] -> Bosatsu/Predef::Int
+        |                (lambda [lst Test::L[a]] (match (var lst Test::L[a])
+        |                            [E, (lit 0 Bosatsu/Predef::Int)]
+        |                            [NE(_, t: Test::L[a]), (ap (var loop Test::L[a] -> Bosatsu/Predef::Int) (var t Test::L[a]) Bosatsu/Predef::Int)])))
+        |            (ap
+        |                (ann
+        |                    Test::L[b] -> Bosatsu/Predef::Int
+        |                    (var loop forall a: *. Test::L[a] -> Bosatsu/Predef::Int))
+        |                (var z Test::L[b])
+        |                Bosatsu/Predef::Int))))
         |out [NonRecursive] = (let
         |    z
         |    (ap
@@ -98,9 +110,19 @@ class TypedExprNormalizationCharTest extends munit.FunSuite {
         |        (lit 1 Bosatsu/Predef::Int)
         |            (ann Test::L[Bosatsu/Predef::Int] (var Test::E forall a: *. Test::L[a]))
         |        Test::L[Bosatsu/Predef::Int])
-        |    (loop [a (var z Test::L[Bosatsu/Predef::Int])] (match (var a Test::L[Bosatsu/Predef::Int])
-        |                [E, (lit 0 Bosatsu/Predef::Int)]
-        |                [NE(_, t: Test::L[Bosatsu/Predef::Int]), (recur (var t Test::L[Bosatsu/Predef::Int]) Bosatsu/Predef::Int)])))
+        |    (letrec
+        |        loop
+        |        (generic
+        |            forall a: *. Test::L[a] -> Bosatsu/Predef::Int
+        |            (lambda [lst Test::L[a]] (match (var lst Test::L[a])
+        |                        [E, (lit 0 Bosatsu/Predef::Int)]
+        |                        [NE(_, t: Test::L[a]), (ap (var loop Test::L[a] -> Bosatsu/Predef::Int) (var t Test::L[a]) Bosatsu/Predef::Int)])))
+        |        (ap
+        |            (ann
+        |                Test::L[Bosatsu/Predef::Int] -> Bosatsu/Predef::Int
+        |                (var loop forall a: *. Test::L[a] -> Bosatsu/Predef::Int))
+        |            (var z Test::L[Bosatsu/Predef::Int])
+        |            Bosatsu/Predef::Int)))
         |""".stripMargin.trim
 
     assertNoDiff(renderNormalized(source), expected)
