@@ -3288,7 +3288,7 @@ x = Foo
     (unoptimizedExpr, normalizedExpr)
   }
 
-  test("normalizeStructuralOnly preserves call sites while full normalize inlines") {
+  test("normalizeAllWithArtifacts exposes pre-inlining call sites") {
     val stmts = Parser.unsafeParse(
       Statement.parser,
       """
@@ -3310,20 +3310,19 @@ g = y -> choose(id(y), y)
 
     val g = Identifier.Name("g")
 
-    val fullNormalizedExpr =
-      TypedExprNormalization
-        .normalizeAll(TestUtils.testPackage, unoptProgram.lets, fullTypeEnv)
-        .find(_._1 == g) match {
+    val artifacts = TypedExprNormalization.normalizeAllWithArtifacts(
+      TestUtils.testPackage,
+      unoptProgram.lets,
+      fullTypeEnv
+    )
+
+    val fullNormalizedExpr = artifacts.normalized.find(_._1 == g) match {
         case Some((_, _, te)) => te
         case None =>
           fail("missing let g in fully normalized lets")
       }
 
-    val structuralNormalizedExpr =
-      TypedExprNormalization
-        .normalizeStructuralOnly(TestUtils.testPackage, fullTypeEnv, unoptProgram)
-        .lets
-        .find(_._1 == g) match {
+    val structuralNormalizedExpr = artifacts.preInlining.find(_._1 == g) match {
         case Some((_, _, te)) => te
         case None =>
           fail("missing let g in structural-only normalized lets")
@@ -3338,6 +3337,18 @@ g = y -> choose(id(y), y)
 
     assertEquals(fullAppCount, 0)
     assert(structuralAppCount > 0)
+
+    val (preInliningProgram, normalizedProgram) =
+      TypedExprNormalization.normalizeProgramWithArtifacts(
+        TestUtils.testPackage,
+        fullTypeEnv,
+        unoptProgram
+      )
+
+    val fromProgramPreInlining = preInliningProgram.lets.find(_._1 == g).map(_._3)
+    val fromProgramNormalized = normalizedProgram.lets.find(_._1 == g).map(_._3)
+    assertEquals(fromProgramPreInlining, Some(structuralNormalizedExpr))
+    assertEquals(fromProgramNormalized, Some(fullNormalizedExpr))
   }
 
   test("if matches normalizes to same code as equivalent match") {
