@@ -322,7 +322,14 @@ object TypedExprNormalization {
       provenance: NormalizationProvenance.Dag[Declaration],
       preInliningRoots: Map[Bindable, ProvenanceId],
       normalizedRoots: Map[Bindable, ProvenanceId]
-  )
+  ) {
+    def coverageReport: NormalizationProvenance.CoverageReport =
+      NormalizationProvenance.coverageFromRoots(
+        provenance,
+        normalizedRoots.values,
+        decl => Some(decl.region)
+      )
+  }
 
   private def normalizeAllWithMode[A: Eq, V](
       pack: PackageName,
@@ -507,6 +514,16 @@ object TypedExprNormalization {
       normalizedRoots = artifacts.normalizedRoots
     )
   }
+
+  def provenanceCoverageReport[A](
+      artifacts: LetNormalizationArtifacts[A],
+      regionOf: A => Option[Region]
+  ): NormalizationProvenance.CoverageReport =
+    NormalizationProvenance.coverageFromRoots(
+      artifacts.provenance,
+      artifacts.normalizedRoots.values,
+      regionOf
+    )
 
   private def simplifyMatch[A: Eq, V](
       namerec: Option[Bindable],
