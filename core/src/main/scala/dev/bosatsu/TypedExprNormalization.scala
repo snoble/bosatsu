@@ -569,6 +569,127 @@ object TypedExprNormalization {
     }
   }
 
+  private def normalizeLetExpression[A: Eq, V](
+      namerec: Option[Bindable],
+      arg: Bindable,
+      ex: TypedExpr[A],
+      in: TypedExpr[A],
+      rec: RecursionKind,
+      tag: A,
+      original: TypedExpr[A],
+      scope: Scope[A],
+      typeEnv: TypeEnv[V]
+  )(implicit ev: V <:< Kind.Arg): Option[TypedExpr[A]] = {
+    // note, Infer has already checked
+    // to make sure rec is accurate
+    val (ni, si) = nameScope(arg, rec, scope)
+    val ex1 = normalize1(ni, ex, si, typeEnv).get
+    val (rec1, ex2) =
+      if (rec.isRecursive) {
+        val ex2 = rewriteTailRecToLoop(arg, ex1).getOrElse(ex1)
+        val rec1 =
+          if (SelfCallKind(arg, ex2) == SelfCallKind.NoCall)
+            RecursionKind.NonRecursive
+          else rec
+        (rec1, ex2)
+      } else (rec, ex1)
+
+    if (!rec1.isRecursive && isSameLocalRef(arg, ex2)) {
+      // Non-recursive identity lets are pure no-ops:
+      // let x = x in body  ==>  body
+      normalize1(namerec, in, scope, typeEnv)
+    } else
+      ex2 match {
+        case Let(ex1a, ex1ex, ex1in, RecursionKind.NonRecursive, ex1tag)
+            if !rec1.isRecursive && in.notFree(ex1a) =>
+          // according to a SPJ paper, it is generally better
+          // to float lets out of nesting inside in:
+          // let foo = let bar = x in bar in foo
+          //
+          // is better to write:
+          // let bar = x in let foo = bar in foo
+          // since you are going to evaluate and keep in scope
+          // the expression
+          // we can lift
+          val l1 = Let(
+            ex1a,
+            ex1ex,
+            Let(arg, ex1in, in, RecursionKind.NonRecursive, tag),
+            RecursionKind.NonRecursive,
+            ex1tag
+          )
+          normalize1(namerec, l1, scope, typeEnv)
+        case _ =>
+          val scopeIn = si.updated(arg, (rec1, ex2, si))
+
+          val in1 = normalize1(namerec, in, scopeIn, typeEnv).get
+          val maybeRewritten =
+            if (rec.isRecursive)
+              rewriteNonEscapingClosureBinding(arg, ex2, in1, rec1, tag)
+            else None
+
+          maybeRewritten match {
+            case Some(rewritten) =>
+              normalize1(namerec, rewritten, scope, typeEnv)
+            case None =>
+              in1 match {
+                case Match(marg, branches, mtag)
+                    if !rec1.isRecursive && marg.notFree(arg) && branches
+                      .exists { case Branch(p, guard, r) =>
+                        p.names.contains(arg) ||
+                        (guard.forall(_.notFree(arg)) && r.notFree(arg))
+                      } =>
+                  // x = y
+                  // match z:
+                  //   case w: ww
+                  //
+                  // can be rewritten as
+                  // match z:
+                  //   case w:
+                  //     x = y
+                  //     ww
+                  //
+                  // when z is not free in x, and at least one branch is not free in x
+                  val b1 = branches.map { branch =>
+                    val p = branch.pattern
+                    val guard = branch.guard
+                    val r = branch.expr
+                    if (
+                      p.names.contains(arg) || (guard.forall(
+                        _.notFree(arg)
+                      ) && r.notFree(arg))
+                    )
+                      branch
+                    else {
+                      val guard1 =
+                        guard.map { g =>
+                          if (g.notFree(arg)) g
+                          else Let(arg, ex2, g, rec1, tag)
+                        }
+                      val r1 =
+                        if (r.notFree(arg)) r
+                        else Let(arg, ex2, r, rec1, tag)
+                      branch.copy(guard = guard1, expr = r1)
+                    }
+                  }
+                  normalize1(namerec, Match(marg, b1, mtag), scope, typeEnv)
+                case _ =>
+                  inlineLetBinding(
+                    namerec = namerec,
+                    arg = arg,
+                    ex2 = ex2,
+                    in1 = in1,
+                    rec1 = rec1,
+                    tag = tag,
+                    original = original,
+                    scope = scope,
+                    typeEnv = typeEnv
+                  )
+              }
+          }
+      }
+  }
+
   // if you have made one step of progress, use this to recurse
   // so we don't throw away if we don't progress more
   private def normalize1[A: Eq, V](
@@ -1290,6 +1411,7 @@ object TypedExprNormalization {
       case App(fn, args, tpe0, tag) =>
         inlineCallSite(namerec, fn, args, tpe0, tag, scope, typeEnv)
       case Let(arg, ex, in, rec, tag) =>
+<<<<<<< HEAD
         // note, Infer has already checked
         // to make sure rec is accurate
         val (ni, si) = nameScope(arg, rec, scope)
@@ -1397,6 +1519,19 @@ object TypedExprNormalization {
                   }
               }
           }
+=======
+        normalizeLetExpression(
+          namerec = namerec,
+          arg = arg,
+          ex = ex,
+          in = in,
+          rec = rec,
+          tag = tag,
+          original = te,
+          scope = scope,
+          typeEnv = typeEnv
+        )
+>>>>>>> 440880fa (refactor(normalization): dispatch let normalization through helper)
       case Loop(args, body, tag) =>
         def hasOuterRecur(te: TypedExpr[A], inNestedLoop: Boolean): Boolean =
           te match {
