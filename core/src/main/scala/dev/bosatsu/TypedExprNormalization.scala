@@ -292,13 +292,31 @@ object TypedExprNormalization {
     }
   }
 
-  def normalizeAll[A: Eq, V](
+  private sealed trait NormalizationMode {
+    def allowCallSiteInlining: Boolean
+    def allowLetInlining: Boolean
+  }
+  private object NormalizationMode {
+    case object Full extends NormalizationMode {
+      val allowCallSiteInlining = true
+      val allowLetInlining = true
+    }
+    case object StructuralOnly extends NormalizationMode {
+      val allowCallSiteInlining = false
+      val allowLetInlining = false
+    }
+  }
+
+  private def normalizeAllWithMode[A: Eq, V](
       pack: PackageName,
       lets: List[(Bindable, RecursionKind, TypedExpr[A])],
-      typeEnv: TypeEnv[V]
+      typeEnv: TypeEnv[V],
+      mode: NormalizationMode
   )(implicit
       ev: V <:< Kind.Arg
   ): List[(Bindable, RecursionKind, TypedExpr[A])] = {
+    given NormalizationMode = mode
+
     @annotation.tailrec
     def loop(
         scope: Scope[A],
@@ -325,6 +343,15 @@ object TypedExprNormalization {
     loop(emptyScope, lets, Nil)
   }
 
+  def normalizeAll[A: Eq, V](
+      pack: PackageName,
+      lets: List[(Bindable, RecursionKind, TypedExpr[A])],
+      typeEnv: TypeEnv[V]
+  )(implicit
+      ev: V <:< Kind.Arg
+  ): List[(Bindable, RecursionKind, TypedExpr[A])] =
+    normalizeAllWithMode(pack, lets, typeEnv, NormalizationMode.Full)
+
   def normalizeProgram[A, V](
       p: PackageName,
       fullTypeEnv: TypeEnv[V],
@@ -337,6 +364,19 @@ object TypedExprNormalization {
     Program(typeEnv, normalLets, extDefs, stmts)
   }
 
+  def normalizeStructuralOnly[A, V](
+      p: PackageName,
+      fullTypeEnv: TypeEnv[V],
+      prog: Program[TypeEnv[V], TypedExpr[Declaration], A]
+  )(implicit
+      ev: V <:< Kind.Arg
+  ): Program[TypeEnv[V], TypedExpr[Declaration], A] = {
+    val Program(typeEnv, lets, extDefs, stmts) = prog
+    val normalLets =
+      normalizeAllWithMode(p, lets, fullTypeEnv, NormalizationMode.StructuralOnly)
+    Program(typeEnv, normalLets, extDefs, stmts)
+  }
+
   private def simplifyMatch[A: Eq, V](
       namerec: Option[Bindable],
       arg: TypedExpr[A],
@@ -344,7 +384,10 @@ object TypedExprNormalization {
       tag: A,
       scope: Scope[A],
       typeEnv: TypeEnv[V]
-  )(implicit ev: V <:< Kind.Arg): Option[TypedExpr[A]] =
+  )(implicit
+      ev: V <:< Kind.Arg,
+      mode: NormalizationMode
+  ): Option[TypedExpr[A]] =
     branches match {
       case NonEmptyList(Branch(p, None, e), Nil)
           if !e.freeVarsDup.exists(p.names.toSet) =>
@@ -486,7 +529,10 @@ object TypedExprNormalization {
       tag: A,
       scope: Scope[A],
       typeEnv: TypeEnv[V]
-  )(implicit ev: V <:< Kind.Arg): Option[TypedExpr[A]] = {
+  )(implicit
+      ev: V <:< Kind.Arg,
+      mode: NormalizationMode
+  ): Option[TypedExpr[A]] = {
     val tpe = Type.normalize(tpe0)
     val f1 = normalize1(None, fn, scope, typeEnv).get
     // the second and third branches use this but the first doesn't
@@ -496,7 +542,10 @@ object TypedExprNormalization {
     }
     val ws = Impl.WithScope(scope, ev.substituteCo[TypeEnv](typeEnv))
 
-    f1 match {
+    if (!mode.allowCallSiteInlining) {
+      if ((f1 eq fn) && (tpe == tpe0) && (a1 eq args)) None
+      else Some(App(f1, a1, tpe, tag))
+    } else f1 match {
       // TODO: what if f1: Generic(_, AnnotatedLambda(_, _, _))
       // we should still be able ton convert this to a let by
       // instantiating to the right args
@@ -541,9 +590,17 @@ object TypedExprNormalization {
       original: TypedExpr[A],
       scope: Scope[A],
       typeEnv: TypeEnv[V]
-  )(implicit ev: V <:< Kind.Arg): Option[TypedExpr[A]] = {
+  )(implicit
+      ev: V <:< Kind.Arg,
+      mode: NormalizationMode
+  ): Option[TypedExpr[A]] = {
     val cnt = in1.freeVarsDup.count(_ == arg)
     if (cnt > 0) {
+      if (!mode.allowLetInlining) {
+        val step = Let(arg, ex2, in1, rec1, tag)
+        if ((step: TypedExpr[A]) === original) None
+        else Some(step)
+      } else {
       // the arg is needed
       val isSimp = Impl.isSimple(ex2, lambdaSimple = true)
       val shouldInline = (!rec1.isRecursive) && {
@@ -563,6 +620,7 @@ object TypedExprNormalization {
           if ((step: TypedExpr[A]) === original) None
           else normalize1(namerec, step, scope, typeEnv)
       }
+      }
     } else {
       // let x = y in z if x isn't free in z = z
       Some(in1)
@@ -579,7 +637,10 @@ object TypedExprNormalization {
       original: TypedExpr[A],
       scope: Scope[A],
       typeEnv: TypeEnv[V]
-  )(implicit ev: V <:< Kind.Arg): Option[TypedExpr[A]] = {
+  )(implicit
+      ev: V <:< Kind.Arg,
+      mode: NormalizationMode
+  ): Option[TypedExpr[A]] = {
     // note, Infer has already checked
     // to make sure rec is accurate
     val (ni, si) = nameScope(arg, rec, scope)
@@ -697,7 +758,10 @@ object TypedExprNormalization {
       te: TypedExpr[A],
       scope: Scope[A],
       typeEnv: TypeEnv[V]
-  )(implicit ev: V <:< Kind.Arg): Some[TypedExpr[A]] =
+  )(implicit
+      ev: V <:< Kind.Arg,
+      mode: NormalizationMode
+  ): Some[TypedExpr[A]] =
     normalizeLetOpt(namerec, te, scope, typeEnv) match {
       case None        => Some(te)
       case s @ Some(_) => s
@@ -1229,7 +1293,10 @@ object TypedExprNormalization {
       te: TypedExpr[A],
       scope: Scope[A],
       typeEnv: TypeEnv[V]
-  )(implicit ev: V <:< Kind.Arg): Option[TypedExpr[A]] = {
+  )(implicit
+      ev: V <:< Kind.Arg,
+      mode: NormalizationMode
+  ): Option[TypedExpr[A]] = {
 
     val kindOf: Type => Option[Kind] =
       Type.kindOfOption { case const @ Type.TyConst(_) =>
@@ -1639,6 +1706,7 @@ object TypedExprNormalization {
   }
 
   def normalize[A: Eq](te: TypedExpr[A]): Option[TypedExpr[A]] = {
+    given NormalizationMode = NormalizationMode.Full
     val norm0 = normalize1(None, te, emptyScope, TypeEnv.empty).get
     val norm1 = shareImmutableValues(norm0)
     if ((norm1: TypedExpr[A]) === te) None
